@@ -9,20 +9,22 @@ import { UserResponseDto } from '../types/api';
 // 저장소: localStorage (persist middleware)
 // ============================================
 
-interface AuthState {
-  // 상태
+// 저장될 상태 타입 (액션 제외)
+interface PersistedAuthState {
   isAuthenticated: boolean;
   user: UserResponseDto | null;
   accessToken: string | null;
+}
 
-  // 액션
+// 전체 상태 타입 (상태 + 액션)
+interface AuthState extends PersistedAuthState {
   login: (token: string, user: UserResponseDto) => void;
   logout: () => void;
   checkAuth: () => boolean;
 }
 
-export const useAuthStore = create(
-  persist<AuthState>(
+export const useAuthStore = create<AuthState>()(
+  persist(
     (set, get) => ({
       // ----------------------------------------
       // 초기 상태
@@ -83,12 +85,12 @@ export const useAuthStore = create(
     }),
     {
       name: 'mr-daebak-auth', // localStorage 키
-      // 민감한 정보는 저장하지 않도록 partialize 사용
+      // 저장할 상태만 선택 (액션은 제외, PersistedAuthState 타입만 저장)
       partialize: (state) => ({
         isAuthenticated: state.isAuthenticated,
         user: state.user,
         accessToken: state.accessToken,
-      }),
+      } as PersistedAuthState),
     }
   )
 );

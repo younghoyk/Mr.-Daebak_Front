@@ -4,11 +4,13 @@ import { BrowserRouter, Routes, Route, Navigate, Link, useNavigate } from 'react
 // ============================================
 // 페이지 컴포넌트 Import
 // ============================================
+import { OrderFlowPage } from './features/order/OrderFlowPage';
 import { DinnerListPage } from './features/dinner/DinnerListPage';
 import { DinnerDetailPage } from './features/dinner/DinnerDetailPage';
 import { LoginPage } from './features/auth/LoginPage';
 import { RegisterPage } from './features/auth/RegisterPage';
 import { CartPage } from './features/cart/CartPage';
+import { MyPage } from './features/mypage/MyPage';
 
 // ============================================
 // 공통 컴포넌트 Import
@@ -55,14 +57,22 @@ const NavigationBar: React.FC = () => {
       <div className="flex items-center gap-3">
         {isAuthenticated ? (
           // ----------------------------------------
-          // 로그인 상태: 사용자명, 장바구니, AI주문, 로그아웃
+          // 로그인 상태: 사용자명(마이페이지), 장바구니, AI주문, 로그아웃
           // ----------------------------------------
           <>
-            {/* 사용자명 표시 */}
-            {user?.displayName && (
-              <span className="text-sm text-gray-600 hidden sm:block">
-                {user.displayName}님
-              </span>
+            {/* 사용자명 (클릭 시 마이페이지) */}
+            {(user?.displayName || user?.username) && (
+              <Link
+                to="/mypage"
+                className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-100 hover:bg-gray-200 transition-colors hidden sm:flex"
+              >
+                <span className="w-7 h-7 bg-green-600 text-white rounded-full flex items-center justify-center text-sm font-bold">
+                  {(user.displayName || user.username || '').charAt(0).toUpperCase()}
+                </span>
+                <span className="text-sm font-medium text-gray-700">
+                  {user.displayName || user.username}님
+                </span>
+              </Link>
             )}
 
             {/* 장바구니 버튼 */}
@@ -131,8 +141,15 @@ const App: React.FC = () => {
           {/* ------------------------------------------ */}
           {/* 보호된 라우트 (로그인 필요)                 */}
           {/* ------------------------------------------ */}
-          {/* 메인 페이지 (디너 목록) */}
+          {/* 메인 페이지 (단계별 주문 플로우) */}
           <Route path="/" element={
+            <ProtectedRoute>
+              <OrderFlowPage />
+            </ProtectedRoute>
+          } />
+
+          {/* 기존 디너 목록 페이지 (별도 접근용) */}
+          <Route path="/menu" element={
             <ProtectedRoute>
               <DinnerListPage />
             </ProtectedRoute>
@@ -149,6 +166,13 @@ const App: React.FC = () => {
           <Route path="/cart" element={
             <ProtectedRoute>
               <CartPage />
+            </ProtectedRoute>
+          } />
+
+          {/* 마이페이지 (회원정보 수정, 결제수단 관리) */}
+          <Route path="/mypage" element={
+            <ProtectedRoute>
+              <MyPage />
             </ProtectedRoute>
           } />
 

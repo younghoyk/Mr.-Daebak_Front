@@ -30,6 +30,54 @@ export interface RegisterDto {
 }
 
 // ============================================
+// 사용자 주소 관련 타입 (백엔드 API 추가 예정)
+// ============================================
+
+export interface UserAddressDto {
+  id: string;
+  address: string;
+  isDefault: boolean;
+}
+
+export interface AddUserAddressRequest {
+  address: string;
+  isDefault?: boolean;
+}
+
+// ============================================
+// 회원정보 수정 관련 타입 (백엔드 API 추가 예정)
+// ============================================
+
+export interface UpdateUserProfileRequest {
+  displayName?: string;
+  phoneNumber?: string;
+  address?: string;
+  email?: string;
+}
+
+// ============================================
+// 결제수단 관련 타입 (백엔드 API 추가 예정)
+// ============================================
+
+export interface PaymentMethodDto {
+  id: string;
+  cardNumber: string; // 마스킹된 카드번호 (예: **** **** **** 1234)
+  cardHolder: string;
+  expiryDate: string; // MM/YY 형식
+  cardType: 'VISA' | 'MASTERCARD' | 'AMEX' | 'OTHER';
+  isDefault: boolean;
+  createdAt: string;
+}
+
+export interface AddPaymentMethodRequest {
+  cardNumber: string;
+  cardHolder: string;
+  expiryDate: string;
+  cvv: string;
+  isDefault?: boolean;
+}
+
+// ============================================
 // 인증 관련 타입
 // ============================================
 
