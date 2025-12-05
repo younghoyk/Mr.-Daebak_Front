@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import apiClient from '../../lib/axios';
+import { useAuthStore } from '../../stores/useAuthStore';
 import {
   OrderResponseDto,
   OrderStatus,
@@ -53,6 +54,7 @@ const formatDate = (dateString: string): string => {
 };
 
 export const AdminOrderPage: React.FC = () => {
+  const { user, isAuthenticated, validateToken } = useAuthStore();
   const [orders, setOrders] = useState<OrderResponseDto[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -64,24 +66,51 @@ export const AdminOrderPage: React.FC = () => {
   const [rejectionReason, setRejectionReason] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
 
-  useEffect(() => {
-    fetchOrders();
-  }, []);
-
-  const fetchOrders = async () => {
+  const fetchOrders = useCallback(async () => {
     try {
       setIsLoading(true);
       setError(null);
-      // 최신 주문 30개 조회 (백엔드에서 이미 정렬되어 반환됨)
+      // 최신 주문 50개 조회 (백엔드에서 시간순으로 정렬되어 반환됨)
       const response = await apiClient.get<OrderResponseDto[]>('/orders/admin/all');
-      setOrders(response.data);
+      setOrders(response.data || []);
     } catch (err: any) {
       console.error('주문 목록 로딩 실패:', err);
-      setError('주문 목록을 불러오는데 실패했습니다.');
+      if (err.response?.status === 401) {
+        setError('인증이 필요합니다. 다시 로그인해주세요.');
+      } else if (err.response?.status === 403) {
+        setError('관리자 권한이 필요합니다.');
+      } else {
+        const errorMessage = err.response?.data?.message || err.message || '알 수 없는 오류';
+        setError(`주문 목록을 불러오는데 실패했습니다: ${errorMessage}`);
+      }
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    // 관리자 권한 확인
+    if (user?.authority !== 'ROLE_ADMIN') {
+      setError('관리자 권한이 필요합니다.');
+      setIsLoading(false);
+      return;
+    }
+
+    // 토큰 검증 후 주문 목록 로드
+    const initialize = async () => {
+      try {
+        if (!isAuthenticated) {
+          await validateToken();
+        }
+        await fetchOrders();
+      } catch (err) {
+        setError('인증에 실패했습니다. 다시 로그인해주세요.');
+        setIsLoading(false);
+      }
+    };
+
+    initialize();
+  }, [user, isAuthenticated, validateToken, fetchOrders]);
 
   const handleSearch = async () => {
     // 검색어가 없으면 기본 목록으로 복귀
@@ -217,12 +246,43 @@ export const AdminOrderPage: React.FC = () => {
     );
   }
 
-  const pendingOrders = orders.filter((o) => o.orderStatus === 'PENDING_APPROVAL');
-  const approvedOrders = orders.filter((o) => o.orderStatus === 'APPROVED');
+  // 모든 주문을 시간순으로 정렬 (최신순)
+  const sortedOrders = [...orders].sort((a, b) => 
+    new Date(b.orderedAt).getTime() - new Date(a.orderedAt).getTime()
+  );
+
+  const pendingOrders = sortedOrders.filter((o) => o.orderStatus === 'PENDING_APPROVAL');
+  // PLACED와 APPROVED를 통합하여 "진행 중 주문"으로 표시
+  const activeOrders = sortedOrders.filter((o) => 
+    o.orderStatus === 'PLACED' || o.orderStatus === 'APPROVED'
+  );
+  const rejectedOrders = sortedOrders.filter((o) => o.orderStatus === 'REJECTED');
 
   return (
     <div className="max-w-6xl mx-auto p-4 pt-10 pb-20">
       <h1 className="text-2xl font-bold mb-6">관리자 주문 관리</h1>
+      
+      {/* 전체 주문 통계 */}
+      <div className="bg-white rounded-lg shadow-sm border p-4 mb-6">
+        <div className="grid grid-cols-4 gap-4 text-center">
+          <div>
+            <p className="text-sm text-gray-500">전체 주문</p>
+            <p className="text-2xl font-bold text-gray-900">{sortedOrders.length}</p>
+          </div>
+          <div>
+            <p className="text-sm text-gray-500">승인 대기</p>
+            <p className="text-2xl font-bold text-yellow-600">{pendingOrders.length}</p>
+          </div>
+          <div>
+            <p className="text-sm text-gray-500">진행 중</p>
+            <p className="text-2xl font-bold text-green-600">{activeOrders.length}</p>
+          </div>
+          <div>
+            <p className="text-sm text-gray-500">거절됨</p>
+            <p className="text-2xl font-bold text-red-600">{rejectedOrders.length}</p>
+          </div>
+        </div>
+      </div>
 
       {/* 검색 */}
       <div className="bg-white rounded-lg shadow-sm border p-4 mb-6">
@@ -321,11 +381,27 @@ export const AdminOrderPage: React.FC = () => {
                 <div className="border-t pt-4">
                   <h4 className="font-medium text-gray-700 mb-2">주문 상품</h4>
                   <div className="space-y-2">
-                    {order.items.map((item, index) => (
-                      <div key={index} className="text-sm text-gray-600">
-                        {item.productName} × {item.quantity}개
+                    {/* 디너 상품 */}
+                    {order.items
+                      .filter(item => !item.productType || item.productType === 'DINNER_PRODUCT')
+                      .map((item, index) => (
+                        <div key={index} className="text-sm text-gray-600">
+                          {item.productName} × {item.quantity}개
+                        </div>
+                      ))}
+                    {/* 추가 메뉴 */}
+                    {order.items.filter(item => item.productType === 'ADDITIONAL_MENU_PRODUCT').length > 0 && (
+                      <div className="mt-2 pt-2 border-t border-dashed border-gray-300">
+                        <p className="text-xs font-semibold text-blue-700 mb-1">추가 메뉴:</p>
+                        {order.items
+                          .filter(item => item.productType === 'ADDITIONAL_MENU_PRODUCT')
+                          .map((item, index) => (
+                            <div key={index} className="text-sm text-blue-600">
+                              {item.productName.replace('추가 메뉴: ', '')} × {item.quantity}개
+                            </div>
+                          ))}
                       </div>
-                    ))}
+                    )}
                   </div>
                 </div>
               </div>
@@ -334,94 +410,188 @@ export const AdminOrderPage: React.FC = () => {
         </div>
       )}
 
-      {/* 승인된 주문 */}
-      <div>
-        <h2 className="text-xl font-bold text-gray-900 mb-4">
-          승인된 주문 ({approvedOrders.length})
-        </h2>
-        <div className="space-y-4">
-          {approvedOrders.map((order) => (
-            <div
-              key={order.id}
-              className="bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow"
-            >
-              <div className="flex items-start justify-between mb-4">
-                <div>
-                  <h3 className="text-lg font-bold text-gray-900 mb-1">
-                    주문 번호: {order.orderNumber}
-                  </h3>
-                  <p className="text-sm text-gray-500">
-                    주문일시: {formatDate(order.orderedAt)}
-                  </p>
-                  {order.username && (
+      {/* 진행 중 주문 (PLACED + APPROVED) */}
+      {activeOrders.length > 0 && (
+        <div className="mb-6">
+          <h2 className="text-xl font-bold text-green-600 mb-4">
+            진행 중 주문 ({activeOrders.length})
+          </h2>
+          <div className="space-y-4">
+            {activeOrders.map((order) => (
+              <div
+                key={order.id}
+                className="bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow"
+              >
+                <div className="flex items-start justify-between mb-4">
+                  <div>
+                    <h3 className="text-lg font-bold text-gray-900 mb-1">
+                      주문 번호: {order.orderNumber}
+                    </h3>
                     <p className="text-sm text-gray-500">
-                      사용자: {order.username}
+                      주문일시: {formatDate(order.orderedAt)}
                     </p>
-                  )}
-                  <div className="flex gap-2 mt-2">
-                    <span
-                      className={`px-3 py-1 rounded-full text-xs font-medium ${getStatusBadgeColor(
-                        order.orderStatus
-                      )}`}
-                    >
-                      {order.orderStatus}
-                    </span>
-                    <span
-                      className={`px-3 py-1 rounded-full text-xs font-medium ${getStatusBadgeColor(
-                        order.deliveryStatus
-                      )}`}
-                    >
-                      {order.deliveryStatus}
-                    </span>
+                    {order.username && (
+                      <p className="text-sm text-gray-500">
+                        사용자: {order.username}
+                      </p>
+                    )}
+                    <div className="flex gap-2 mt-2">
+                      <span
+                        className={`px-3 py-1 rounded-full text-xs font-medium ${getStatusBadgeColor(
+                          order.orderStatus
+                        )}`}
+                      >
+                        {order.orderStatus}
+                      </span>
+                      <span
+                        className={`px-3 py-1 rounded-full text-xs font-medium ${getStatusBadgeColor(
+                          order.deliveryStatus
+                        )}`}
+                      >
+                        {order.deliveryStatus}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    {order.deliveryStatus === 'READY' && (
+                      <button
+                        onClick={() => handleUpdateDeliveryStatus(order.id, 'COOKING')}
+                        disabled={isProcessing}
+                        className="px-4 py-2 bg-orange-600 text-white rounded-lg font-medium hover:bg-orange-700 transition-all disabled:opacity-50"
+                      >
+                        조리 시작
+                      </button>
+                    )}
+                    {order.deliveryStatus === 'COOKING' && (
+                      <button
+                        onClick={() => handleUpdateDeliveryStatus(order.id, 'SHIPPING')}
+                        disabled={isProcessing}
+                        className="px-4 py-2 bg-purple-600 text-white rounded-lg font-medium hover:bg-purple-700 transition-all disabled:opacity-50"
+                      >
+                        배달 시작
+                      </button>
+                    )}
+                    {order.deliveryStatus === 'SHIPPING' && (
+                      <button
+                        onClick={() => handleUpdateDeliveryStatus(order.id, 'DELIVERED')}
+                        disabled={isProcessing}
+                        className="px-4 py-2 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700 transition-all disabled:opacity-50"
+                      >
+                        배달 완료
+                      </button>
+                    )}
                   </div>
                 </div>
-                <div className="flex flex-col gap-2">
-                  {order.deliveryStatus === 'READY' && (
-                    <button
-                      onClick={() => handleUpdateDeliveryStatus(order.id, 'COOKING')}
-                      disabled={isProcessing}
-                      className="px-4 py-2 bg-orange-600 text-white rounded-lg font-medium hover:bg-orange-700 transition-all disabled:opacity-50"
-                    >
-                      조리 시작
-                    </button>
-                  )}
-                  {order.deliveryStatus === 'COOKING' && (
-                    <button
-                      onClick={() => handleUpdateDeliveryStatus(order.id, 'SHIPPING')}
-                      disabled={isProcessing}
-                      className="px-4 py-2 bg-purple-600 text-white rounded-lg font-medium hover:bg-purple-700 transition-all disabled:opacity-50"
-                    >
-                      배달 시작
-                    </button>
-                  )}
-                  {order.deliveryStatus === 'SHIPPING' && (
-                    <button
-                      onClick={() => handleUpdateDeliveryStatus(order.id, 'DELIVERED')}
-                      disabled={isProcessing}
-                      className="px-4 py-2 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700 transition-all disabled:opacity-50"
-                    >
-                      배달 완료
-                    </button>
-                  )}
+                <div className="border-t pt-4">
+                  <h4 className="font-medium text-gray-700 mb-2">주문 상품</h4>
+                  <div className="space-y-2">
+                    {/* 디너 상품 */}
+                    {order.items
+                      .filter(item => !item.productType || item.productType === 'DINNER_PRODUCT')
+                      .map((item, index) => (
+                        <div key={index} className="text-sm text-gray-600">
+                          {item.productName} × {item.quantity}개 - ₩{item.lineTotal.toLocaleString()}
+                        </div>
+                      ))}
+                    {/* 추가 메뉴 */}
+                    {order.items.filter(item => item.productType === 'ADDITIONAL_MENU_PRODUCT').length > 0 && (
+                      <div className="mt-2 pt-2 border-t border-dashed border-gray-300">
+                        <p className="text-xs font-semibold text-blue-700 mb-1">추가 메뉴:</p>
+                        {order.items
+                          .filter(item => item.productType === 'ADDITIONAL_MENU_PRODUCT')
+                          .map((item, index) => (
+                            <div key={index} className="text-sm text-blue-600">
+                              {item.productName.replace('추가 메뉴: ', '')} × {item.quantity}개 - ₩{item.lineTotal.toLocaleString()}
+                            </div>
+                          ))}
+                      </div>
+                    )}
+                  </div>
+                  <p className="text-right mt-4 font-bold text-lg">
+                    총 금액: ₩{order.grandTotal.toLocaleString()}
+                  </p>
                 </div>
               </div>
-              <div className="border-t pt-4">
-                <h4 className="font-medium text-gray-700 mb-2">주문 상품</h4>
-                <div className="space-y-2">
-                  {order.items.map((item, index) => (
-                    <div key={index} className="text-sm text-gray-600">
-                      {item.productName} × {item.quantity}개 - ₩{item.lineTotal.toLocaleString()}
-                    </div>
-                  ))}
-                </div>
-                <p className="text-right mt-4 font-bold text-lg">
-                  총 금액: ₩{order.grandTotal.toLocaleString()}
-                </p>
-              </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
-      </div>
+      )}
+
+      {/* 거절된 주문 */}
+      {rejectedOrders.length > 0 && (
+        <div className="mb-6">
+          <h2 className="text-xl font-bold text-red-600 mb-4">
+            거절된 주문 ({rejectedOrders.length})
+          </h2>
+          <div className="space-y-4">
+            {rejectedOrders.map((order) => (
+              <div
+                key={order.id}
+                className="bg-white rounded-lg shadow-sm border-2 border-red-200 p-6"
+              >
+                <div className="flex items-start justify-between mb-4">
+                  <div>
+                    <h3 className="text-lg font-bold text-gray-900 mb-1">
+                      주문 번호: {order.orderNumber}
+                    </h3>
+                    <p className="text-sm text-gray-500">
+                      주문일시: {formatDate(order.orderedAt)}
+                    </p>
+                    {order.username && (
+                      <p className="text-sm text-gray-500">
+                        사용자: {order.username}
+                      </p>
+                    )}
+                    <div className="flex gap-2 mt-2">
+                      <span
+                        className={`px-3 py-1 rounded-full text-xs font-medium ${getStatusBadgeColor(
+                          order.orderStatus
+                        )}`}
+                      >
+                        {order.orderStatus}
+                      </span>
+                    </div>
+                    {order.rejectionReason && (
+                      <p className="text-sm text-red-600 mt-2">
+                        거절 사유: {order.rejectionReason}
+                      </p>
+                    )}
+                  </div>
+                </div>
+                <div className="border-t pt-4">
+                  <h4 className="font-medium text-gray-700 mb-2">주문 상품</h4>
+                  <div className="space-y-2">
+                    {/* 디너 상품 */}
+                    {order.items
+                      .filter(item => !item.productType || item.productType === 'DINNER_PRODUCT')
+                      .map((item, index) => (
+                        <div key={index} className="text-sm text-gray-600">
+                          {item.productName} × {item.quantity}개 - ₩{item.lineTotal.toLocaleString()}
+                        </div>
+                      ))}
+                    {/* 추가 메뉴 */}
+                    {order.items.filter(item => item.productType === 'ADDITIONAL_MENU_PRODUCT').length > 0 && (
+                      <div className="mt-2 pt-2 border-t border-dashed border-gray-300">
+                        <p className="text-xs font-semibold text-blue-700 mb-1">추가 메뉴:</p>
+                        {order.items
+                          .filter(item => item.productType === 'ADDITIONAL_MENU_PRODUCT')
+                          .map((item, index) => (
+                            <div key={index} className="text-sm text-blue-600">
+                              {item.productName.replace('추가 메뉴: ', '')} × {item.quantity}개 - ₩{item.lineTotal.toLocaleString()}
+                            </div>
+                          ))}
+                      </div>
+                    )}
+                  </div>
+                  <p className="text-right mt-4 font-bold text-lg">
+                    총 금액: ₩{order.grandTotal.toLocaleString()}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* 승인 모달 */}
       {showApprovalModal && selectedOrder && (

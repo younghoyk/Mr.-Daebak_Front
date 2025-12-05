@@ -6,8 +6,8 @@ import { ServingStyleResponseDto, CreateProductRequest, ProductResponseDto } fro
 // ============================================
 // StyleStep 컴포넌트
 // ============================================
-// 역할: 3단계 - 서빙 스타일 선택
-// API: GET /api/serving-styles/getAllServingStyles
+// 역할: 3단계 - 각 디너 인스턴스별 서빙 스타일 선택 및 Product 생성
+// API: GET /api/serving-styles/getAllServingStyles, POST /api/products/createProduct
 // ============================================
 
 // 스타일별 이모지 매핑
@@ -21,22 +21,13 @@ const getStyleEmoji = (name: string): string => {
 
 export const StyleStep: React.FC = () => {
   const { 
-    selectedDinner, 
-    selectedStyle, 
+    selectedDinners,
     selectedAddress,
-    createdProduct,
-    quantity,
-    memo,
-    setStyle, 
-    setCreatedProduct,
+    setInstanceStyle,
+    setInstanceProduct,
     nextStep, 
     prevStep 
   } = useOrderFlowStore();
-  
-  // 현재 가격 계산 (디너 + 서빙스타일)
-  const currentPrice = selectedDinner
-    ? (selectedDinner.basePrice + (selectedStyle?.extraPrice || 0)) * quantity
-    : 0;
 
   // ----------------------------------------
   // 상태 관리
@@ -44,12 +35,7 @@ export const StyleStep: React.FC = () => {
   const [styles, setStyles] = useState<ServingStyleResponseDto[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [isCreatingProduct, setIsCreatingProduct] = useState(false);
-
-  // 샴페인 축제 디너는 Grand 또는 Deluxe 스타일만 선택 가능
-  const isChampagneDinner = selectedDinner?.dinnerName
-    ?.toLowerCase()
-    .includes('champagne');
+  const [creatingProducts, setCreatingProducts] = useState<Set<string>>(new Set());
 
   // ----------------------------------------
   // API 호출: 서빙 스타일 목록 조회
@@ -75,17 +61,66 @@ export const StyleStep: React.FC = () => {
     fetchStyles();
   }, []);
 
+  // 인스턴스는 setInstanceStyle에서 자동으로 생성됨
+
   // ----------------------------------------
   // 이벤트 핸들러
   // ----------------------------------------
-  const handleNext = async () => {
-    if (!selectedStyle) {
-      alert('서빙 스타일을 선택해주세요.');
-      return;
-    }
+  const handleStyleSelect = async (
+    dinnerItemId: string,
+    instanceIndex: number,
+    style: ServingStyleResponseDto
+  ) => {
+    const dinnerItem = selectedDinners.find(d => d.id === dinnerItemId);
+    if (!dinnerItem) return;
 
-    if (!selectedDinner) {
-      alert('디너를 선택해주세요.');
+    // 스타일 설정
+    setInstanceStyle(dinnerItemId, instanceIndex, style);
+
+    // Product 생성
+    const instanceKey = `${dinnerItemId}-${instanceIndex}`;
+    setCreatingProducts(prev => new Set(prev).add(instanceKey));
+
+    try {
+      const request: CreateProductRequest = {
+        dinnerId: dinnerItem.dinner.id,
+        servingStyleId: style.id,
+        quantity: 1,  // 각 인스턴스는 quantity=1
+        address: selectedAddress,
+        memo: '',
+      };
+
+      const response = await apiClient.post<ProductResponseDto>(
+        '/products/createProduct',
+        request
+      );
+
+      // Product 설정
+      setInstanceProduct(dinnerItemId, instanceIndex, response.data);
+    } catch (err: any) {
+      console.error('Product 생성 실패:', err);
+      const errorMessage = err.response?.data?.message || '상품 생성에 실패했습니다.';
+      alert(errorMessage);
+      // 스타일 초기화
+      setInstanceStyle(dinnerItemId, instanceIndex, null as any);
+    } finally {
+      setCreatingProducts(prev => {
+        const next = new Set(prev);
+        next.delete(instanceKey);
+        return next;
+      });
+    }
+  };
+
+  const handleNext = () => {
+    // 모든 인스턴스의 스타일이 선택되었는지 확인
+    const allStylesSelected = selectedDinners.every(item => {
+      return item.instances.length === item.quantity &&
+        item.instances.every(instance => instance.style && instance.product);
+    });
+
+    if (!allStylesSelected) {
+      alert('모든 디너의 스타일을 선택해주세요.');
       return;
     }
 
@@ -94,50 +129,21 @@ export const StyleStep: React.FC = () => {
       return;
     }
 
-    try {
-      setIsCreatingProduct(true);
-      setError(null);
+    nextStep();
+  };
 
-      // 이전 Product가 있고, 서빙스타일이 변경된 경우 이전 Product 삭제
-      if (createdProduct) {
-        try {
-          await apiClient.delete(`/products/${createdProduct.id}`);
-        } catch (err: any) {
-          // 삭제 실패해도 계속 진행 (이미 삭제되었거나 없는 경우)
-          // 404 에러는 무시 (이미 삭제된 경우)
-          if (err.response?.status !== 404) {
-            console.warn('이전 Product 삭제 실패:', err);
-          }
-        }
-      }
+  // 샴페인 축제 디너인지 확인
+  const isChampagneDinner = (dinnerName: string) => {
+    return dinnerName.toLowerCase().includes('champagne');
+  };
 
-      // createProduct API 호출
-      const request: CreateProductRequest = {
-        dinnerId: selectedDinner.id,
-        servingStyleId: selectedStyle.id,
-        quantity: quantity,
-        address: selectedAddress,
-        memo: memo || undefined,
-      };
-
-      const response = await apiClient.post<ProductResponseDto>(
-        '/products/createProduct',
-        request
-      );
-
-      // 생성된 product를 store에 저장
-      setCreatedProduct(response.data);
-
-      // 다음 단계로 이동
-      nextStep();
-    } catch (err: any) {
-      console.error('상품 생성 실패:', err);
-      const errorMessage = err.response?.data?.message || '상품 생성에 실패했습니다. 다시 시도해주세요.';
-      setError(errorMessage);
-      alert(errorMessage);
-    } finally {
-      setIsCreatingProduct(false);
+  // 스타일이 선택 가능한지 확인
+  const isStyleAvailable = (dinnerName: string, styleName: string) => {
+    if (isChampagneDinner(dinnerName)) {
+      const lowerStyle = styleName.toLowerCase();
+      return lowerStyle.includes('grand') || lowerStyle.includes('deluxe');
     }
+    return true;
   };
 
   // ----------------------------------------
@@ -175,99 +181,121 @@ export const StyleStep: React.FC = () => {
   // 렌더링: 메인
   // ----------------------------------------
   return (
-    <div className="max-w-3xl mx-auto">
+    <div className="max-w-4xl mx-auto">
       {/* 헤더 */}
       <div className="text-center mb-8">
         <h2 className="text-2xl font-bold text-gray-900 mb-2">
-          <span className="text-green-600">서빙 스타일</span>을 선택하세요
+          각 디너의 <span className="text-green-600">서빙 스타일</span>을 선택하세요
         </h2>
-        <p className="text-gray-500">분위기에 맞는 스타일을 골라주세요</p>
+        <p className="text-gray-500">각 디너마다 원하는 스타일을 선택해주세요</p>
       </div>
 
-      {/* 선택된 디너 표시 */}
-      {selectedDinner && (
-        <div className="bg-green-50 rounded-xl p-4 mb-6 flex items-center gap-3">
-          <span className="text-2xl">🍽️</span>
-          <div>
-            <p className="text-sm text-green-600">선택된 디너</p>
-            <p className="font-bold">{selectedDinner.dinnerName}</p>
-          </div>
-        </div>
-      )}
-
-      {/* 스타일 목록 */}
-      <div className="space-y-4 mb-8">
-        {styles.map((style) => {
-          const styleNameLower = style.styleName.toLowerCase();
-          // 샴페인 축제 디너는 Grand 또는 Deluxe만 선택 가능
-          const isDisabled = isChampagneDinner && 
-            !(styleNameLower.includes('grand') || styleNameLower.includes('deluxe'));
-
-          return (
-            <button
-              key={style.id}
-              onClick={() => !isDisabled && setStyle(style)}
-              disabled={isDisabled}
-              className={`w-full text-left p-6 rounded-2xl border-2 transition-all ${
-                isDisabled
-                  ? 'border-gray-200 bg-gray-100 opacity-50 cursor-not-allowed'
-                  : selectedStyle?.id === style.id
-                  ? 'border-green-600 bg-green-50 shadow-lg'
-                  : 'border-gray-200 bg-white hover:border-green-300 hover:shadow-md'
-              }`}
-            >
-              <div className="flex items-center justify-between gap-4">
-                <div className="flex items-center gap-4 flex-1 min-w-0">
-                  <span className="text-4xl flex-shrink-0">{getStyleEmoji(style.styleName)}</span>
-                  <div className="flex-1 min-w-0">
-                    <h3 className="text-xl font-bold text-gray-900">
-                      {style.styleName}
-                      {isDisabled && (
-                        <span className="ml-2 text-sm text-red-500">(선택 불가)</span>
-                      )}
-                    </h3>
-                    <p className="text-sm text-gray-500">{style.description}</p>
-                  </div>
-                </div>
-                <div className="text-right flex-shrink-0">
-                  <p className="text-lg font-bold text-green-600 whitespace-nowrap">
-                    {style.extraPrice > 0
-                      ? `+₩${style.extraPrice.toLocaleString()}`
-                      : '무료'}
-                  </p>
-                </div>
-              </div>
-            </button>
-          );
-        })}
-      </div>
-
-      {/* 스타일이 없는 경우 */}
-      {styles.length === 0 && (
-        <div className="text-center py-12">
-          <p className="text-gray-500">선택 가능한 스타일이 없습니다.</p>
-        </div>
-      )}
-
-      {/* 현재 가격 표시 */}
-      {selectedDinner && (
-        <div className="bg-green-50 rounded-xl p-4 mb-6 text-center">
-          <p className="text-sm text-gray-500 mb-1">현재 선택된 가격</p>
-          <div className="space-y-1">
-            <p className="text-sm text-gray-600">
-              디너: ₩{selectedDinner.basePrice.toLocaleString()}
-              {selectedStyle && (
-                <span> + 서빙스타일: ₩{selectedStyle.extraPrice.toLocaleString()}</span>
-              )}
-            </p>
-            <p className="text-2xl font-bold text-green-600">
-              총 ₩{currentPrice.toLocaleString()}
-            </p>
-            {quantity > 1 && (
-              <p className="text-xs text-gray-500">
-                (₩{((selectedDinner.basePrice + (selectedStyle?.extraPrice || 0))).toLocaleString()} × {quantity}개)
+      {/* 각 디너별 인스턴스 스타일 선택 */}
+      <div className="space-y-8 mb-8">
+        {selectedDinners.map((dinnerItem) => (
+          <div key={dinnerItem.id} className="bg-white rounded-2xl border-2 border-gray-200 p-6">
+            {/* 디너 헤더 */}
+            <div className="mb-6 pb-4 border-b border-gray-200">
+              <h3 className="text-xl font-bold text-gray-900">
+                {dinnerItem.dinner.dinnerName}
+              </h3>
+              <p className="text-sm text-gray-500 mt-1">
+                {dinnerItem.quantity}개 주문
               </p>
-            )}
+            </div>
+
+            {/* 각 인스턴스별 스타일 선택 */}
+            <div className="space-y-6">
+              {Array.from({ length: dinnerItem.quantity }).map((_, index) => {
+                const instance = dinnerItem.instances[index];
+                const instanceKey = `${dinnerItem.id}-${index}`;
+                const isCreating = creatingProducts.has(instanceKey);
+                const selectedStyle = instance?.style;
+
+                return (
+                  <div key={index} className="bg-gray-50 rounded-xl p-4">
+                    <div className="mb-3">
+                      <span className="text-sm font-semibold text-gray-700">
+                        {dinnerItem.dinner.dinnerName} - {index + 1}번째
+                      </span>
+                    </div>
+
+                    {/* 스타일 선택 버튼들 */}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      {styles
+                        .filter(style => isStyleAvailable(dinnerItem.dinner.dinnerName, style.styleName))
+                        .map((style) => {
+                          const isSelected = selectedStyle?.id === style.id;
+                          const isDisabled = isCreating;
+
+                          return (
+                            <button
+                              key={style.id}
+                              onClick={() => !isDisabled && handleStyleSelect(dinnerItem.id, index, style)}
+                              disabled={isDisabled}
+                              className={`p-4 rounded-xl border-2 transition-all text-left ${
+                                isDisabled
+                                  ? 'border-gray-200 bg-gray-100 opacity-50 cursor-not-allowed'
+                                  : isSelected
+                                  ? 'border-green-600 bg-green-50 shadow-md'
+                                  : 'border-gray-200 bg-white hover:border-green-300 hover:shadow-sm'
+                              }`}
+                            >
+                              <div className="flex items-center gap-3 mb-2">
+                                <span className="text-2xl">{getStyleEmoji(style.styleName)}</span>
+                                <div className="flex-1">
+                                  <h4 className="font-bold text-gray-900 text-sm">
+                                    {style.styleName}
+                                  </h4>
+                                  <p className="text-xs text-gray-500 line-clamp-1">
+                                    {style.description}
+                                  </p>
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <p className="text-sm font-bold text-green-600">
+                                  {style.extraPrice > 0
+                                    ? `+₩${style.extraPrice.toLocaleString()}`
+                                    : '무료'}
+                                </p>
+                              </div>
+                              {isSelected && (
+                                <div className="mt-2 text-center">
+                                  <span className="text-xs bg-green-600 text-white px-2 py-1 rounded-full">
+                                    선택됨
+                                  </span>
+                                </div>
+                              )}
+                            </button>
+                          );
+                        })}
+                    </div>
+
+                    {/* 생성 중 표시 */}
+                    {isCreating && (
+                      <div className="mt-3 text-center">
+                        <span className="text-sm text-gray-500">상품 생성 중...</span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* 진행 상황 표시 */}
+      {selectedDinners.length > 0 && (
+        <div className="bg-green-50 rounded-xl p-4 mb-6">
+          <div className="flex justify-between items-center">
+            <span className="text-sm text-gray-600">스타일 선택 진행률</span>
+            <span className="text-sm font-bold text-green-600">
+              {selectedDinners.reduce((acc, item) => {
+                const selected = item.instances.filter(i => i.style && i.product).length;
+                return acc + selected;
+              }, 0)} / {selectedDinners.reduce((acc, item) => acc + item.quantity, 0)}
+            </span>
           </div>
         </div>
       )}
@@ -275,35 +303,27 @@ export const StyleStep: React.FC = () => {
       {/* 버튼 영역 */}
       <div className="flex gap-4">
         <button
-          onClick={() => {
-            // 서빙스타일과 product가 초기화됨을 알리는 모달
-            if (selectedStyle || createdProduct) {
-              const confirmed = window.confirm(
-                '이전 단계로 돌아가면 선택한 서빙스타일과 메뉴 구성이 초기화됩니다. 계속하시겠습니까?'
-              );
-              if (confirmed) {
-                setStyle(null);
-                setCreatedProduct(null);
-                prevStep();
-              }
-            } else {
-              prevStep();
-            }
-          }}
+          onClick={prevStep}
           className="flex-1 py-4 rounded-xl text-lg font-bold border-2 border-gray-300 text-gray-600 hover:bg-gray-50 transition-all"
         >
           이전
         </button>
         <button
           onClick={handleNext}
-          disabled={!selectedStyle || isCreatingProduct}
+          disabled={creatingProducts.size > 0 || !selectedDinners.every(item => 
+            item.instances.length === item.quantity &&
+            item.instances.every(instance => instance.style && instance.product)
+          )}
           className={`flex-1 py-4 rounded-xl text-lg font-bold transition-all ${
-            selectedStyle && !isCreatingProduct
+            creatingProducts.size === 0 && selectedDinners.every(item => 
+              item.instances.length === item.quantity &&
+              item.instances.every(instance => instance.style && instance.product)
+            )
               ? 'bg-green-600 text-white hover:bg-green-700'
               : 'bg-gray-300 text-gray-500 cursor-not-allowed'
           }`}
         >
-          {isCreatingProduct ? '상품 생성 중...' : '다음 단계로'}
+          다음 단계로
         </button>
       </div>
     </div>

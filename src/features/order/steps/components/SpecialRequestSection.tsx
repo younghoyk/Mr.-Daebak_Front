@@ -21,11 +21,12 @@ export const SpecialRequestSection: React.FC<SpecialRequestSectionProps> = ({
       <textarea
         value={memo}
         onChange={(e) => onMemoChange(e.target.value)}
-        placeholder="예: 샴페인을 2병으로 변경해주세요, 커피는 빼주세요"
+        placeholder="예 : 일회용품도 같이 배달해주세요. 휴지 많이 주세요."
         className="w-full p-4 border border-gray-200 rounded-xl resize-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
         rows={3}
       />
     </div>
   );
 };
+
 

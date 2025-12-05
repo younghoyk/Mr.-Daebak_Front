@@ -48,7 +48,7 @@ const formatExpiryDate = (value: string): string => {
 
 export const MyPage: React.FC = () => {
   const navigate = useNavigate();
-  const { user } = useAuthStore();
+  const { user, updateUser } = useAuthStore();
 
   // ----------------------------------------
   // 상태 관리: 회원정보
@@ -142,16 +142,24 @@ export const MyPage: React.FC = () => {
   const handleSaveProfile = async () => {
     setIsSavingProfile(true);
     try {
-      // TODO: 백엔드 API 추가 후 활성화
-      // await apiClient.patch('/users/me', profileForm);
-      console.log('프로필 저장 예정:', profileForm);
+      const response = await apiClient.patch('/users/me', profileForm);
+      
+      // 사용자 정보 업데이트
+      if (response.data && user) {
+        updateUser({
+          ...user,
+          displayName: response.data.displayName || user.displayName,
+          phoneNumber: response.data.phoneNumber || user.phoneNumber,
+          email: response.data.email || user.email,
+        });
+      }
 
-      // 임시: 성공 메시지
-      alert('회원정보가 저장되었습니다. (백엔드 API 연동 후 실제 저장됩니다)');
+      alert('회원정보가 저장되었습니다.');
       setIsEditingProfile(false);
-    } catch (err) {
+    } catch (err: any) {
       console.error('프로필 저장 실패:', err);
-      alert('저장에 실패했습니다.');
+      const errorMessage = err.response?.data?.message || '저장에 실패했습니다.';
+      alert(errorMessage);
     } finally {
       setIsSavingProfile(false);
     }

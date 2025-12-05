@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import apiClient from '../../../lib/axios';
 import { OrderResponseDto, OrderStatus, PaymentStatus, DeliveryStatus } from '../../../types/api';
+import { useAuthStore } from '../../../stores/useAuthStore';
 
 // ============================================
 // OrderHistoryPage 컴포넌트
@@ -75,28 +76,49 @@ export const OrderHistoryPage: React.FC = () => {
   const [orders, setOrders] = useState<OrderResponseDto[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const { isAuthenticated, validateToken } = useAuthStore();
 
   useEffect(() => {
     const fetchOrders = async () => {
       try {
         setIsLoading(true);
         setError(null);
+        
+        // 토큰 확인 및 검증
+        const token = localStorage.getItem('accessToken');
+        if (token && !isAuthenticated) {
+          const isValid = await validateToken();
+          if (!isValid) {
+            setError('인증이 필요합니다. 다시 로그인해주세요.');
+            setIsLoading(false);
+            return;
+          }
+        } else if (!token) {
+          setError('인증이 필요합니다. 다시 로그인해주세요.');
+          setIsLoading(false);
+          return;
+        }
+        
         const response = await apiClient.get<OrderResponseDto[]>('/orders');
+        
         // 최신 주문이 먼저 오도록 정렬
-        const sortedOrders = response.data.sort((a, b) => 
+        const sortedOrders = (response.data || []).sort((a, b) => 
           new Date(b.orderedAt).getTime() - new Date(a.orderedAt).getTime()
         );
         setOrders(sortedOrders);
       } catch (err: any) {
-        console.error('주문 내역 로딩 실패:', err);
-        setError('주문 내역을 불러오는데 실패했습니다.');
+        if (err.response?.status === 401) {
+          setError('인증이 필요합니다. 다시 로그인해주세요.');
+        } else {
+          setError(`주문 내역을 불러오는데 실패했습니다. ${err.response?.data?.message || err.message || ''}`);
+        }
       } finally {
         setIsLoading(false);
       }
     };
 
     fetchOrders();
-  }, []);
+  }, [isAuthenticated, validateToken]);
 
   if (isLoading) {
     return (
@@ -170,23 +192,84 @@ export const OrderHistoryPage: React.FC = () => {
             {/* 주문 아이템 */}
             <div className="mb-4">
               <h3 className="text-sm font-semibold text-gray-700 mb-3">주문 상품</h3>
-              <div className="space-y-2">
-                {order.items.map((item, index) => (
-                  <div
-                    key={index}
-                    className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
-                  >
-                    <div className="flex-1">
-                      <p className="font-medium text-gray-900">{item.productName}</p>
-                      {item.optionSummary && (
-                        <p className="text-xs text-gray-500 mt-1">{item.optionSummary}</p>
+              <div className="space-y-3">
+                {/* 디너 상품 */}
+                {order.items
+                  .filter(item => !item.productType || item.productType === 'DINNER_PRODUCT')
+                  .map((item, index) => (
+                    <div
+                      key={index}
+                      className="bg-gray-50 rounded-lg p-4"
+                    >
+                      <div className="flex items-start justify-between mb-2">
+                        <div className="flex-1">
+                          <p className="font-medium text-gray-900">{item.productName}</p>
+                          {item.optionSummary && (
+                            <p className="text-xs text-gray-500 mt-1">{item.optionSummary}</p>
+                          )}
+                        </div>
+                        <div className="text-right ml-4">
+                          <p className="text-sm font-bold text-green-600">
+                            ₩{item.lineTotal.toLocaleString()}
+                          </p>
+                          <p className="text-xs text-gray-500">
+                            {item.quantity}개 × ₩{item.unitPrice.toLocaleString()}
+                          </p>
+                        </div>
+                      </div>
+                      {/* Product의 메뉴 아이템 상세 표시 */}
+                      {item.menuItems && item.menuItems.length > 0 && (
+                        <div className="mt-2 pt-2 border-t border-gray-200">
+                          <p className="text-xs font-semibold text-gray-600 mb-1">구성 메뉴:</p>
+                          <div className="space-y-1">
+                            {item.menuItems.map((menuItem, menuIndex) => (
+                              <div key={menuIndex} className="flex justify-between items-center text-xs">
+                                <span className="text-gray-600">
+                                  • {menuItem.menuItemName} {menuItem.quantity}개
+                                </span>
+                                <span className="text-gray-500">
+                                  ₩{menuItem.lineTotal.toLocaleString()}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
                       )}
-                      <p className="text-xs text-gray-500 mt-1">
-                        수량: {item.quantity}개 × ₩{item.unitPrice.toLocaleString()} = ₩{item.lineTotal.toLocaleString()}
-                      </p>
+                    </div>
+                  ))}
+
+                {/* 추가 메뉴 */}
+                {order.items.filter(item => item.productType === 'ADDITIONAL_MENU_PRODUCT').length > 0 && (
+                  <div className="mt-4 pt-4 border-t-2 border-dashed border-gray-300">
+                    <h4 className="text-sm font-semibold text-blue-700 mb-2">추가 메뉴</h4>
+                    <div className="space-y-2">
+                      {order.items
+                        .filter(item => item.productType === 'ADDITIONAL_MENU_PRODUCT')
+                        .map((item, index) => (
+                          <div
+                            key={index}
+                            className="bg-blue-50 rounded-lg p-3"
+                          >
+                            <div className="flex items-start justify-between">
+                              <div className="flex-1">
+                                <p className="font-medium text-gray-900 text-sm">
+                                  {item.productName.replace('추가 메뉴: ', '')}
+                                </p>
+                              </div>
+                              <div className="text-right ml-4">
+                                <p className="text-sm font-bold text-blue-600">
+                                  ₩{item.lineTotal.toLocaleString()}
+                                </p>
+                                <p className="text-xs text-gray-500">
+                                  {item.quantity}개 × ₩{item.unitPrice.toLocaleString()}
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
                     </div>
                   </div>
-                ))}
+                )}
               </div>
             </div>
 

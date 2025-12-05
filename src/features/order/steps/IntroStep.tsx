@@ -14,9 +14,6 @@ export const IntroStep: React.FC = () => {
     <div className="max-w-4xl mx-auto text-center">
       {/* 히어로 섹션 */}
       <div className="mb-12">
-        {/* 로고/이모지 */}
-        <div className="text-8xl mb-6">🍽️</div>
-
         {/* 타이틀 */}
         <h1 className="text-4xl sm:text-5xl font-extrabold text-gray-900 mb-4">
           Mr. <span className="text-green-600">DAEBAK</span>
@@ -24,9 +21,7 @@ export const IntroStep: React.FC = () => {
 
         {/* 슬로건 */}
         <p className="text-xl sm:text-2xl text-gray-600 font-medium mb-8">
-          "특별한 날에 집에서 편안히 보내면서
-          <br />
-          <span className="text-green-600">당신의 소중한 사람</span>을 감동시켜라"
+          "특별한 날, 집에서 <span className="text-green-600">당신의 소중한 사람</span>을 감동시켜 주세요"
         </p>
       </div>
 
@@ -90,13 +85,13 @@ export const IntroStep: React.FC = () => {
           <h3 className="font-bold text-gray-800 mb-3">서빙 스타일 선택 가능</h3>
           <div className="flex flex-wrap gap-3">
             <span className="bg-white px-4 py-2 rounded-full text-sm border border-gray-200">
-              🥡 Simple - 플라스틱 용기
+              Simple - 플라스틱 용기
             </span>
             <span className="bg-white px-4 py-2 rounded-full text-sm border border-gray-200">
-              🍽️ Grand - 도자기 접시, 나무 쟁반
+              Grand - 도자기 접시, 나무 쟁반
             </span>
             <span className="bg-white px-4 py-2 rounded-full text-sm border border-gray-200">
-              ✨ Deluxe - 꽃 장식, 린넨 냅킨, 유리잔
+              Deluxe - 꽃 장식, 린넨 냅킨, 유리잔
             </span>
           </div>
         </div>
@@ -107,13 +102,8 @@ export const IntroStep: React.FC = () => {
         onClick={nextStep}
         className="w-full sm:w-auto px-12 py-5 bg-green-600 text-white text-xl font-bold rounded-2xl hover:bg-green-700 transition-all transform hover:scale-105 shadow-lg"
       >
-        🛒 주문하기
+        주문하기
       </button>
-
-      {/* 하단 안내 */}
-      <p className="mt-6 text-gray-400 text-sm">
-        로그인된 고객님만 주문이 가능합니다
-      </p>
     </div>
   );
 };
