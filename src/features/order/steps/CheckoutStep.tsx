@@ -68,6 +68,7 @@ export const CheckoutStep: React.FC = () => {
     fetchPaymentMethods();
   }, []);
 
+  // ★ Store의 menuCustomizations 기반으로 가격 계산 (CustomizeStep과 동일)
   const calculateProductPrice = useCallback((
     dinnerItem: typeof selectedDinners[0],
     instanceIndex: number
@@ -78,10 +79,8 @@ export const CheckoutStep: React.FC = () => {
     // 기본 가격 (dinner + style)
     const basePrice = dinnerItem.dinner.basePrice + instance.style.extraPrice;
 
-    // 메뉴 아이템 가격 계산 (각 Product의 메뉴 커스터마이징만)
+    // 메뉴 아이템 가격 계산 (커스터마이징 차이 반영)
     let menuItemsTotal = 0;
-    
-    // 기본 메뉴 아이템 가격 (기본 수량보다 많으면 추가 비용, 적으면 할인)
     instance.menuCustomizations.forEach(customization => {
       const menuItem = allMenuItems.find(m => m.id === customization.menuItemId);
       if (menuItem) {
@@ -91,42 +90,25 @@ export const CheckoutStep: React.FC = () => {
     });
 
     return basePrice + menuItemsTotal;
-  }, [allMenuItems, selectedDinners]);
+  }, [allMenuItems]);
 
   // ----------------------------------------
   // 총 가격 계산
-  // 공통 추가 메뉴는 각 Product에 추가하지 않고 별도로 계산
-  // Product별 가격 + 공통 추가 메뉴 가격 = 총 결제 금액
+  // ★ Store의 menuCustomizations 기반 (CustomizeStep과 동일)
   // ----------------------------------------
   const calculateTotalPrice = useCallback((): number => {
-    // 각 Product의 기본 가격 합산 (공통 추가 메뉴 제외)
     let total = 0;
+
+    // 각 Product 가격 합산 (커스터마이징 반영)
     selectedDinners.forEach(item => {
       item.instances.forEach((instance, instanceIndex) => {
         if (instance.product && instance.style) {
-          // Product의 기본 가격 계산 (공통 추가 메뉴 제외)
-          // Product의 totalPrice에서 공통 추가 메뉴를 제외한 가격 사용
-          const basePrice = item.dinner.basePrice + (instance.style.extraPrice || 0);
-          
-          // Product의 메뉴 커스터마이징 가격 계산 (공통 추가 메뉴 제외)
-          let menuItemsTotal = 0;
-          instance.menuCustomizations.forEach(customization => {
-            const menuItem = allMenuItems.find(m => m.id === customization.menuItemId);
-            if (menuItem) {
-              const quantityDiff = customization.currentQuantity - customization.defaultQuantity;
-              menuItemsTotal += menuItem.unitPrice * quantityDiff;
-            }
-          });
-          
-          total += basePrice + menuItemsTotal;
-        } else if (instance.style) {
-          // Product가 아직 생성되지 않은 경우
           total += calculateProductPrice(item, instanceIndex);
         }
       });
     });
 
-    // 공통 추가 메뉴 가격 추가 (별도로 계산)
+    // 공통 추가 메뉴 가격 추가
     globalAdditionalMenuItems.forEach(additionalItem => {
       const menuItem = allMenuItems.find(m => m.id === additionalItem.menuItemId);
       if (menuItem) {
@@ -167,31 +149,72 @@ export const CheckoutStep: React.FC = () => {
     setIsProcessing(true);
 
     try {
+      // ★ Step 0: 커스터마이징을 백엔드에 반영 (결제 전)
+      for (const dinnerItem of selectedDinners) {
+        for (const instance of dinnerItem.instances) {
+          if (!instance.product) continue;
+
+          // 메뉴 커스터마이징 반영
+          for (const customization of instance.menuCustomizations) {
+            if (customization.currentQuantity !== customization.defaultQuantity) {
+              try {
+                await apiClient.patch(
+                  `/products/${instance.product.id}/menu-items/${customization.menuItemId}`,
+                  { quantity: Math.max(0, customization.currentQuantity) }
+                );
+              } catch {
+                // 메뉴 아이템 업데이트 실패 시 무시하고 계속 진행
+              }
+            }
+          }
+
+          // 특별 요청사항을 Product의 memo에 저장
+          if (globalMemo) {
+            try {
+              await apiClient.patch(`/products/${instance.product.id}/memo`, { memo: globalMemo });
+            } catch {
+              // 메모 업데이트 실패 시 무시하고 계속 진행
+            }
+          }
+        }
+      }
+
       // 모든 디너 Product를 Cart에 담기
-      const cartItems = selectedDinners.flatMap(item =>
+      // ★ unitPrice 포함: 프론트엔드에서 계산한 가격을 백엔드에 전달
+      const cartItems = selectedDinners.flatMap((item, dinnerIndex) =>
         item.instances
           .filter(instance => instance.product)
-          .map(instance => ({
+          .map((instance, instanceIndex) => ({
             productId: instance.product!.id,
-            quantity: 1  // 각 인스턴스는 quantity=1
+            quantity: 1,  // 각 인스턴스는 quantity=1
+            unitPrice: calculateProductPrice(item, instanceIndex)  // ★ 프론트엔드 계산 가격
           }))
       );
 
       // 공통 추가 메뉴를 별도 Product로 생성
-      const additionalMenuProductIds: string[] = [];
+      // ★ 각 추가 메뉴는 quantity=1인 Product로 생성하고, 원하는 수량만큼 Cart에 추가
+      const additionalMenuCartItems: { productId: string; quantity: number; unitPrice: number }[] = [];
       if (globalAdditionalMenuItems.length > 0) {
         for (const additionalItem of globalAdditionalMenuItems) {
           try {
+            // ★ Product는 항상 quantity=1로 생성 (단가 기준)
             const additionalProductResponse = await apiClient.post<ProductResponseDto>(
               '/products/createAdditionalMenuProduct',
               {
                 menuItemId: additionalItem.menuItemId,
-                quantity: additionalItem.quantity,
+                quantity: 1,  // ★ Product는 1개 단위로 생성
                 memo: globalMemo || undefined,
                 address: selectedAddress
               }
             );
-            additionalMenuProductIds.push(additionalProductResponse.data.id);
+            // ★ Cart에는 사용자가 원하는 수량으로 추가
+            // ★ unitPrice는 메뉴 아이템의 단가 (allMenuItems에서 조회)
+            const menuItem = allMenuItems.find(m => m.id === additionalItem.menuItemId);
+            additionalMenuCartItems.push({
+              productId: additionalProductResponse.data.id,
+              quantity: additionalItem.quantity,  // ★ 사용자가 선택한 수량
+              unitPrice: menuItem?.unitPrice ?? 0  // ★ 메뉴 아이템 단가
+            });
           } catch (err: any) {
             const errorMessage = err.response?.data?.message || err.message || '알 수 없는 오류';
             alert(`추가 메뉴 "${additionalItem.menuItemName}" 생성에 실패했습니다.\n\n오류: ${errorMessage}`);
@@ -201,13 +224,10 @@ export const CheckoutStep: React.FC = () => {
         }
       }
 
-      // 추가 메뉴 Product도 Cart에 추가
+      // 추가 메뉴 Product도 Cart에 추가 (사용자가 선택한 수량 반영)
       const allCartItems = [
         ...cartItems,
-        ...additionalMenuProductIds.map(productId => ({
-          productId,
-          quantity: 1
-        }))
+        ...additionalMenuCartItems
       ];
 
       if (allCartItems.length === 0) {
@@ -344,11 +364,12 @@ export const CheckoutStep: React.FC = () => {
                             ₩{instancePrice.toLocaleString()}
                           </p>
                         </div>
-                        {instance.product.productMenuItems && instance.product.productMenuItems.length > 0 && (
+                        {/* ★ Store의 menuCustomizations 사용 (커스터마이징 반영) */}
+                        {instance.menuCustomizations && instance.menuCustomizations.length > 0 && (
                           <div className="mt-2 space-y-1">
-                            {instance.product.productMenuItems.map((item, idx) => (
+                            {instance.menuCustomizations.map((customization, idx) => (
                               <div key={idx} className="text-xs text-gray-600">
-                                • {item.menuItemName} {item.quantity}개
+                                • {customization.menuItemName} {customization.currentQuantity}개
                               </div>
                             ))}
                           </div>

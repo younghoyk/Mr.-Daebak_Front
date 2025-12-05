@@ -68,9 +68,8 @@ export const AddressStep: React.FC = () => {
             address: inputAddress.trim(),
           };
           await apiClient.post('/users/addresses', request);
-        } catch (err) {
+        } catch {
           // 주소 저장 실패해도 계속 진행 (이미 입력한 주소로 주문 진행)
-          console.warn('주소 저장 실패 (계속 진행):', err);
         }
       }
 

@@ -325,12 +325,29 @@ export interface UpdateDeliveryStatusRequest {
 // 음성 주문(Voice Order) 관련 타입
 // ============================================
 
+// 백엔드 UiAction과 동기화
 export enum UiAction {
   NONE = 'NONE',
   SHOW_CONFIRM_MODAL = 'SHOW_CONFIRM_MODAL',
   SHOW_CANCEL_CONFIRM = 'SHOW_CANCEL_CONFIRM',
   UPDATE_ORDER_LIST = 'UPDATE_ORDER_LIST',
   ORDER_COMPLETED = 'ORDER_COMPLETED',
+  REQUEST_ADDRESS = 'REQUEST_ADDRESS',
+  REQUEST_PAYMENT_METHOD = 'REQUEST_PAYMENT_METHOD',
+  PROCEED_CHECKOUT = 'PROCEED_CHECKOUT',
+}
+
+// 백엔드 OrderFlowState와 동기화
+export enum OrderFlowState {
+  IDLE = 'IDLE',
+  SELECTING_ADDRESS = 'SELECTING_ADDRESS',
+  SELECTING_MENU = 'SELECTING_MENU',
+  SELECTING_STYLE = 'SELECTING_STYLE',
+  SELECTING_QUANTITY = 'SELECTING_QUANTITY',
+  ASKING_MORE = 'ASKING_MORE',
+  CUSTOMIZING = 'CUSTOMIZING',
+  READY_TO_CHECKOUT = 'READY_TO_CHECKOUT',
+  CONFIRMING = 'CONFIRMING',
 }
 
 export interface VoiceAdditionalMenuItemDto {
@@ -369,7 +386,7 @@ export interface VoiceChatRequestDto {
 export interface VoiceChatResponseDto {
   userMessage: string;
   assistantMessage: string;
-  nextState?: string;  // OrderFlowState (CUSTOMIZING, SELECTING_QUANTITY 등)
+  flowState: OrderFlowState;  // 현재 플로우 상태
   uiAction: UiAction;
   currentOrder: VoiceOrderItemDto[];
   totalPrice: number;
@@ -377,4 +394,64 @@ export interface VoiceChatResponseDto {
   userAddresses?: string[];  // 사용자 주소 목록
   orderId?: string;          // 주문 완료 시 주문 ID
   orderNumber?: string;      // 주문 완료 시 주문 번호
+  storeUpdate?: StoreUpdateDto;  // 프론트엔드 Store 업데이트 정보
+}
+
+// Product 메뉴 아이템 정보 (백엔드에서 Product 생성 시 반환)
+export interface StoreProductMenuItemDto {
+  menuItemId: string;
+  menuItemName: string;
+  defaultQuantity: number;
+  currentQuantity: number;
+  unitPrice: number;
+}
+
+export interface StoreUpdateDto {
+  flowState?: OrderFlowState;
+  address?: string;
+  memo?: string;
+
+  // 디너 추가 정보
+  dinnersToAdd?: Array<{
+    dinnerId: string;
+    dinnerName: string;
+    description?: string;
+    basePrice: number;
+    quantity: number;
+  }>;
+
+  // 스타일 설정 및 Product 생성 정보 (핵심!)
+  stylesToSet?: Array<{
+    dinnerId: string;         // Dinner ID
+    dinnerName: string;       // Dinner 이름
+    instanceIndex: number;    // 인스턴스 인덱스
+    styleId: string;          // ServingStyle ID
+    styleName: string;        // ServingStyle 이름
+    styleExtraPrice: number;  // 스타일 추가 가격
+
+    // 백엔드에서 생성한 Product 정보
+    productId: string;        // 생성된 Product ID
+    productName: string;      // Product 이름
+    totalPrice: number;       // Product 총 가격
+    productMenuItems: StoreProductMenuItemDto[];  // 기본 메뉴 아이템 목록
+  }>;
+
+  // 메뉴 아이템 수량 변경
+  menuItemsToUpdate?: Array<{
+    dinnerId: string;
+    instanceIndex: number;
+    productId: string;
+    menuItemId: string;
+    menuItemName: string;
+    quantity: number;
+  }>;
+
+  // 공통 추가 메뉴
+  additionalMenuItemsToAdd?: Array<{
+    menuItemId: string;
+    menuItemName: string;
+    quantity: number;
+    unitPrice: number;
+    productId?: string;  // 생성된 ADDITIONAL_MENU_PRODUCT ID
+  }>;
 }

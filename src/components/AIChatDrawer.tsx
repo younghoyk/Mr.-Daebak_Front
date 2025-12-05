@@ -1,31 +1,45 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useUIStore } from '../stores/useUIStore';
+import { useOrderFlowStore } from '../stores/useOrderFlowStore';
 import apiClient from '../lib/axios';
 import {
   VoiceChatRequestDto,
   VoiceChatResponseDto,
-  VoiceOrderItemDto,
   VoiceChatMessageDto,
+  VoiceOrderItemDto,
   UiAction,
-  CreateCartRequest,
+  OrderFlowState,
 } from '../types/api';
 
+// ============================================
+// AIChatDrawer 컴포넌트
+// ============================================
+// 역할: LLM 채팅을 통한 주문 플로우 (GUI와 동일한 구조)
+// - 백엔드에서 Product 생성 및 결제 처리
+// - 프론트엔드는 UI 표시 및 리디렉션만 담당
+// ============================================
+
 export const AIChatDrawer: React.FC = () => {
+  const navigate = useNavigate();
   const { isAIChatOpen, closeAIChat } = useUIStore();
-  
-  // 상태 관리
+  const { resetOrder } = useOrderFlowStore();
+
+  // 채팅 상태
   const [messages, setMessages] = useState<VoiceChatMessageDto[]>([]);
   const [inputMessage, setInputMessage] = useState('');
-  const [currentOrder, setCurrentOrder] = useState<VoiceOrderItemDto[]>([]);
-  const [totalPrice, setTotalPrice] = useState(0);
-  const [selectedAddress, setSelectedAddress] = useState<string | null>(null);
-  const [nextState, setNextState] = useState<string | undefined>(undefined);  // OrderFlowState
   const [isLoading, setIsLoading] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
-  const [showConfirmModal, setShowConfirmModal] = useState(false);
-  const [drawerWidth, setDrawerWidth] = useState(600); // 기본 너비를 600px로 설정
+  const [drawerWidth, setDrawerWidth] = useState(500);
   const [isResizing, setIsResizing] = useState(false);
-  
+
+  // 주문 상태 (백엔드에서 관리, 프론트엔드는 표시용)
+  const [currentOrder, setCurrentOrder] = useState<VoiceOrderItemDto[]>([]);
+  const [selectedAddress, setSelectedAddress] = useState<string | null>(null);
+  const [userAddresses, setUserAddresses] = useState<string[]>([]);
+  const [flowState, setFlowState] = useState<OrderFlowState>(OrderFlowState.IDLE);
+  const [totalPrice, setTotalPrice] = useState<number>(0);
+
   // 음성 녹음 관련
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -40,11 +54,8 @@ export const AIChatDrawer: React.FC = () => {
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
       if (!isResizing) return;
-      
-      // 화면 오른쪽에서의 거리 계산
       const newWidth = window.innerWidth - e.clientX;
-      // 최소 너비 400px, 최대 너비 1200px
-      const clampedWidth = Math.max(400, Math.min(1200, newWidth));
+      const clampedWidth = Math.max(400, Math.min(900, newWidth));
       setDrawerWidth(clampedWidth);
     };
 
@@ -67,6 +78,21 @@ export const AIChatDrawer: React.FC = () => {
     };
   }, [isResizing]);
 
+  // Drawer 열릴 때 초기화
+  useEffect(() => {
+    if (isAIChatOpen) {
+      // 새로운 대화 시작
+      if (messages.length === 0) {
+        setMessages([
+          {
+            role: 'assistant',
+            content: '안녕하세요! Mr.Daeback AI입니다. 🍽️\n\n프리미엄 디너 배달 서비스에 오신 것을 환영해요!\n메뉴를 주문하시려면 "발렌타인 디너 주세요" 또는 "메뉴 알려줘"라고 말씀해주세요.',
+          },
+        ]);
+      }
+    }
+  }, [isAIChatOpen, messages.length]);
+
   // 음성 녹음 시작
   const startRecording = async () => {
     try {
@@ -74,23 +100,21 @@ export const AIChatDrawer: React.FC = () => {
       const mediaRecorder = new MediaRecorder(stream, {
         mimeType: 'audio/webm;codecs=opus',
       });
-      
+
       audioChunksRef.current = [];
-      
+
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
           audioChunksRef.current.push(event.data);
         }
       };
-      
+
       mediaRecorder.onstop = async () => {
         const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
         await sendAudioMessage(audioBlob);
-        
-        // 스트림 정리
         stream.getTracks().forEach((track) => track.stop());
       };
-      
+
       mediaRecorderRef.current = mediaRecorder;
       mediaRecorder.start();
       setIsRecording(true);
@@ -121,21 +145,40 @@ export const AIChatDrawer: React.FC = () => {
     });
   };
 
+  // 현재 주문을 백엔드 형식으로 변환
+  const buildCurrentOrderForRequest = (): VoiceOrderItemDto[] => {
+    return currentOrder.map(item => ({
+      dinnerId: item.dinnerId,
+      dinnerName: item.dinnerName,
+      servingStyleId: item.servingStyleId,
+      servingStyleName: item.servingStyleName,
+      quantity: item.quantity,
+      basePrice: item.basePrice,
+      unitPrice: item.unitPrice,
+      totalPrice: item.totalPrice,
+      productId: item.productId,  // ★ productId 포함 (커스터마이징 유지에 필수!)
+    }));
+  };
+
   // 오디오 메시지 전송
   const sendAudioMessage = async (audioBlob: Blob) => {
     try {
       setIsLoading(true);
       const audioBase64 = await audioToBase64(audioBlob);
-      
+
+      // 사용자 메시지 표시 (음성 녹음 중...)
+      const userMsg: VoiceChatMessageDto = { role: 'user', content: '🎤 (음성 메시지)' };
+      setMessages((prev) => [...prev, userMsg]);
+
       const request: VoiceChatRequestDto = {
         audioBase64,
         audioFormat: 'webm',
         conversationHistory: messages,
-        currentOrder: currentOrder.length > 0 ? currentOrder : undefined,
-        selectedAddress: selectedAddress,
+        currentOrder: currentOrder.length > 0 ? buildCurrentOrderForRequest() : undefined,
+        selectedAddress,
       };
-      
-      await sendChatMessage(request);
+
+      await sendChatRequest(request);
     } catch (error) {
       console.error('오디오 전송 실패:', error);
       alert('음성 메시지 전송에 실패했습니다.');
@@ -145,27 +188,29 @@ export const AIChatDrawer: React.FC = () => {
   };
 
   // 텍스트 메시지 전송
-  const sendTextMessage = async () => {
-    if (!inputMessage.trim() || isLoading) return;
-    
-    const userMessage = inputMessage.trim();
-    setInputMessage('');
-    
-    // 사용자 메시지를 대화 히스토리에 추가
-    const userMsg: VoiceChatMessageDto = { role: 'user', content: userMessage };
+  const sendTextMessage = async (overrideMessage?: string) => {
+    const messageToSend = overrideMessage || inputMessage.trim();
+    if (!messageToSend || isLoading) return;
+
+    if (!overrideMessage) {
+      setInputMessage('');
+    }
+
+    // 사용자 메시지를 대화에 추가
+    const userMsg: VoiceChatMessageDto = { role: 'user', content: messageToSend };
     setMessages((prev) => [...prev, userMsg]);
-    
+
     try {
       setIsLoading(true);
-      
+
       const request: VoiceChatRequestDto = {
-        message: userMessage,
+        message: messageToSend,
         conversationHistory: messages,
-        currentOrder: currentOrder.length > 0 ? currentOrder : undefined,
-        selectedAddress: selectedAddress,
+        currentOrder: currentOrder.length > 0 ? buildCurrentOrderForRequest() : undefined,
+        selectedAddress,
       };
-      
-      await sendChatMessage(request);
+
+      await sendChatRequest(request);
     } catch (error) {
       console.error('메시지 전송 실패:', error);
       alert('메시지 전송에 실패했습니다.');
@@ -175,280 +220,97 @@ export const AIChatDrawer: React.FC = () => {
   };
 
   // 백엔드 API 호출
-  const sendChatMessage = async (request: VoiceChatRequestDto) => {
+  const sendChatRequest = async (request: VoiceChatRequestDto) => {
+    const token = localStorage.getItem('accessToken');
+    if (!token) {
+      alert('로그인이 필요합니다.');
+      closeAIChat();
+      navigate('/login');
+      return;
+    }
+
     try {
       const response = await apiClient.post<VoiceChatResponseDto>(
         '/voice-order/chat',
         request
       );
-      
+
       const data = response.data;
-      
+
       // AI 응답을 대화 히스토리에 추가
       const assistantMsg: VoiceChatMessageDto = {
         role: 'assistant',
         content: data.assistantMessage,
       };
       setMessages((prev) => [...prev, assistantMsg]);
-      
-      // 상태 업데이트
-      if (data.currentOrder) {
-        setCurrentOrder(data.currentOrder);
-      }
-      if (data.totalPrice !== undefined) {
-        setTotalPrice(data.totalPrice);
-      }
+
+      // 백엔드 응답으로 상태 업데이트
+      setCurrentOrder(data.currentOrder || []);
+      setTotalPrice(Number(data.totalPrice) || 0);
+      setFlowState(data.flowState || OrderFlowState.IDLE);
+
       if (data.selectedAddress) {
         setSelectedAddress(data.selectedAddress);
       }
-      if (data.nextState) {
-        setNextState(data.nextState);
+
+      if (data.userAddresses) {
+        setUserAddresses(data.userAddresses);
       }
-      
+
       // UI Action 처리
-      handleUiAction(data.uiAction, data);
+      handleUiAction(data);
     } catch (error: any) {
+      console.error('API 호출 실패:', error);
       if (error.response?.status === 401) {
         alert('로그인이 필요합니다.');
         closeAIChat();
+        navigate('/login');
       } else {
         const errorMessage = error.response?.data?.message || '메시지 전송에 실패했습니다.';
-        alert(errorMessage);
+
+        // 에러 메시지를 대화에 추가
+        const errorMsg: VoiceChatMessageDto = {
+          role: 'assistant',
+          content: `죄송해요, 문제가 발생했어요: ${errorMessage}`,
+        };
+        setMessages((prev) => [...prev, errorMsg]);
       }
     }
   };
 
   // UI Action 처리
-  const handleUiAction = (uiAction: UiAction, data: VoiceChatResponseDto) => {
-    switch (uiAction) {
-      case UiAction.SHOW_CONFIRM_MODAL:
-        setShowConfirmModal(true);
-        break;
-      case UiAction.SHOW_CANCEL_CONFIRM:
-        // 주문 취소 확인 (필요시 구현)
-        break;
-      case UiAction.UPDATE_ORDER_LIST:
-        // 주문 목록 업데이트는 이미 currentOrder로 처리됨
-        break;
+  const handleUiAction = (data: VoiceChatResponseDto) => {
+    switch (data.uiAction) {
       case UiAction.ORDER_COMPLETED:
-        // 주문 완료 처리
-        if (data.orderNumber) {
-          alert(
-            `주문이 완료되었습니다!\n\n` +
-            `주문 번호: ${data.orderNumber}\n` +
-            `총 금액: ₩${data.totalPrice.toLocaleString()}\n\n` +
-            `주문 내역 페이지로 이동합니다.`
-          );
-          
-          // 주문 내역 페이지로 이동
-          setTimeout(() => {
-            window.location.href = '/orders';
-          }, 1000);
-        }
-        // 상태 초기화
+        // 주문 완료 - 주문 내역 페이지로 리디렉션
+        setTimeout(() => {
+          resetOrder();
+          setMessages([]);
+          setCurrentOrder([]);
+          setSelectedAddress(null);
+          setTotalPrice(0);
+          setFlowState(OrderFlowState.IDLE);
+          closeAIChat();
+          navigate('/orders', { replace: true });
+        }, 2000);  // 2초 후 리디렉션 (사용자가 메시지를 읽을 시간)
+        break;
+
+      case UiAction.SHOW_CANCEL_CONFIRM:
+        // 주문 취소 - 상태 초기화
         setCurrentOrder([]);
-        setTotalPrice(0);
         setSelectedAddress(null);
-        setNextState(undefined);
-        closeAIChat();
+        setTotalPrice(0);
+        setFlowState(OrderFlowState.IDLE);
         break;
+
+      case UiAction.SHOW_CONFIRM_MODAL:
+      case UiAction.UPDATE_ORDER_LIST:
+      case UiAction.REQUEST_ADDRESS:
+      case UiAction.NONE:
       default:
+        // 기본 처리 - 상태는 이미 업데이트됨
         break;
     }
-  };
-
-  // 주문 확인 및 장바구니에 추가
-  const handleConfirmOrder = async () => {
-    // 완성된 아이템만 필터링 (수량이 0보다 큰 아이템)
-    const completedItems = currentOrder.filter((item) => item.quantity > 0 && item.servingStyleId);
-    
-    if (completedItems.length === 0) {
-      alert('완성된 주문이 없습니다. 모든 메뉴의 수량을 선택해주세요.');
-      return;
-    }
-
-    if (!selectedAddress) {
-      alert('배달 주소를 선택해주세요.');
-      return;
-    }
-
-    try {
-      setIsLoading(true);
-
-      // 1. 각 OrderItem을 Product로 변환 (일반 주문 플로우와 동일)
-      const createdProducts = [];
-      
-      for (const item of completedItems) {
-        if (!item.dinnerId || !item.servingStyleId || item.quantity <= 0) {
-          continue; // 필수 정보가 없는 아이템은 건너뛰기
-        }
-
-        try {
-          let productId: string;
-          
-          // productId가 이미 있으면 Product를 생성하지 않고, 메뉴 구성 변경/추가 메뉴 추가만 처리
-          if (item.productId) {
-            productId = item.productId;
-            
-            // TODO: 메뉴 구성 변경 처리 (일반 플로우의 CustomizeStep과 동일)
-            // 현재는 추가 메뉴 아이템만 처리
-            
-            // 추가 메뉴 아이템이 있으면 추가
-            if (item.additionalMenuItems && item.additionalMenuItems.length > 0) {
-              for (const additionalItem of item.additionalMenuItems) {
-                if (additionalItem.quantity > 0 && additionalItem.menuItemId) {
-                  try {
-                    await apiClient.post(`/products/${productId}/menu-items`, {
-                      menuItemId: additionalItem.menuItemId,
-                      quantity: additionalItem.quantity,
-                    });
-                  } catch (error: any) {
-                    console.error(
-                      `추가 메뉴 아이템 추가 실패 (${additionalItem.menuItemName}):`,
-                      error
-                    );
-                    // 추가 메뉴 아이템 추가 실패해도 계속 진행 (경고만)
-                  }
-                }
-              }
-            }
-          } else {
-            // productId가 없으면 Product 생성 (기존 로직)
-            const productResponse = await apiClient.post('/products/createProduct', {
-              dinnerId: item.dinnerId,
-              servingStyleId: item.servingStyleId,
-              quantity: item.quantity,
-              address: selectedAddress,
-              memo: '',
-            });
-            
-            productId = productResponse.data.id;
-            
-            // 추가 메뉴 아이템이 있으면 추가
-            if (item.additionalMenuItems && item.additionalMenuItems.length > 0) {
-              for (const additionalItem of item.additionalMenuItems) {
-                if (additionalItem.quantity > 0 && additionalItem.menuItemId) {
-                  try {
-                    await apiClient.post(`/products/${productId}/menu-items`, {
-                      menuItemId: additionalItem.menuItemId,
-                      quantity: additionalItem.quantity,
-                    });
-                  } catch (error: any) {
-                    console.error(
-                      `추가 메뉴 아이템 추가 실패 (${additionalItem.menuItemName}):`,
-                      error
-                    );
-                    // 추가 메뉴 아이템 추가 실패해도 계속 진행 (경고만)
-                  }
-                }
-              }
-            }
-          }
-          
-          createdProducts.push({
-            productId: productId,
-            quantity: item.quantity,
-          });
-        } catch (error: any) {
-          console.error(`Product 처리 실패 (${item.dinnerName}):`, error);
-          throw new Error(`${item.dinnerName} 상품 처리에 실패했습니다.`);
-        }
-      }
-
-      if (createdProducts.length === 0) {
-        throw new Error('생성된 상품이 없습니다.');
-      }
-
-      // 2. Cart 생성 (Product들이 모두 준비됨)
-      const cartResponse = await apiClient.post('/carts/createCart', {
-        items: createdProducts,
-        deliveryAddress: selectedAddress,
-        deliveryMethod: 'Delivery',
-        memo: '',
-      });
-
-      // 3. Checkout 처리
-      const orderResponse = await apiClient.post(`/carts/${cartResponse.data.id}/checkout`);
-
-      // 4. 성공 처리
-      const order = orderResponse.data;
-      alert(
-        `주문이 완료되었습니다!\n\n` +
-          `주문 번호: ${order.orderNumber}\n` +
-          `주문 개수: ${completedItems.length}개\n` +
-          `총 금액: ₩${order.grandTotal.toLocaleString()}\n` +
-          `배달 주소: ${selectedAddress}`
-      );
-
-      // 5. 초기화 및 닫기
-      handleCancelOrder();
-      closeAIChat();
-      
-      // 페이지 새로고침 또는 주문 내역 페이지로 이동 가능
-      window.location.reload();
-    } catch (error: any) {
-      console.error('주문 확인 실패:', error);
-      const errorMessage = error.response?.data?.message || error.message || '주문 확인에 실패했습니다.';
-      alert(errorMessage);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // 수량 변경 핸들러
-  const handleQuantityChange = async (itemIndex: number, newQuantity: number) => {
-    if (newQuantity < 1) return;
-    
-    const item = currentOrder[itemIndex];
-    if (!item || !item.dinnerId || !item.servingStyleId) return;
-
-    try {
-      setIsLoading(true);
-      
-      // 백엔드에 수량 변경 요청
-      const request: VoiceChatRequestDto = {
-        message: `${item.dinnerName} ${newQuantity}개로 변경해줘`,
-        conversationHistory: messages,
-        currentOrder: currentOrder,
-        selectedAddress: selectedAddress,
-      };
-      
-      const response = await apiClient.post<VoiceChatResponseDto>(
-        '/voice-order/chat',
-        request
-      );
-      
-      const data = response.data;
-      
-      // 상태 업데이트
-      if (data.currentOrder) {
-        setCurrentOrder(data.currentOrder);
-      }
-      if (data.totalPrice !== undefined) {
-        setTotalPrice(data.totalPrice);
-      }
-      
-      // AI 응답을 대화 히스토리에 추가
-      const assistantMsg: VoiceChatMessageDto = {
-        role: 'assistant',
-        content: data.assistantMessage,
-      };
-      setMessages((prev) => [...prev, assistantMsg]);
-    } catch (error: any) {
-      console.error('수량 변경 실패:', error);
-      alert('수량 변경에 실패했습니다.');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // 주문 취소
-  const handleCancelOrder = () => {
-    setCurrentOrder([]);
-    setTotalPrice(0);
-    setSelectedAddress(null);
-    setMessages([]);
-    setShowConfirmModal(false);
   };
 
   // 컴포넌트 닫기 시 초기화
@@ -456,12 +318,33 @@ export const AIChatDrawer: React.FC = () => {
     if (isRecording) {
       stopRecording();
     }
-    setCurrentOrder([]);
-    setTotalPrice(0);
-    setSelectedAddress(null);
-    setMessages([]);
-    setShowConfirmModal(false);
     closeAIChat();
+  };
+
+  // 플로우 상태 표시
+  const getFlowStateLabel = (state: OrderFlowState): string => {
+    switch (state) {
+      case OrderFlowState.IDLE:
+        return '';
+      case OrderFlowState.SELECTING_ADDRESS:
+        return '📍 주소 선택';
+      case OrderFlowState.SELECTING_MENU:
+        return '🍽️ 메뉴 선택';
+      case OrderFlowState.SELECTING_STYLE:
+        return '✨ 스타일 선택';
+      case OrderFlowState.SELECTING_QUANTITY:
+        return '🔢 수량 선택';
+      case OrderFlowState.ASKING_MORE:
+        return '➕ 추가 주문?';
+      case OrderFlowState.CUSTOMIZING:
+        return '🛠️ 커스터마이징';
+      case OrderFlowState.READY_TO_CHECKOUT:
+        return '💳 결제 준비';
+      case OrderFlowState.CONFIRMING:
+        return '✅ 결제 진행';
+      default:
+        return '';
+    }
   };
 
   return (
@@ -478,66 +361,160 @@ export const AIChatDrawer: React.FC = () => {
       <div
         className={`fixed top-0 right-0 h-full bg-white shadow-2xl z-50 transform ${
           isResizing ? '' : 'transition-transform duration-300 ease-in-out'
-        } ${
-          isAIChatOpen ? 'translate-x-0' : 'translate-x-full'
-        }`}
+        } ${isAIChatOpen ? 'translate-x-0' : 'translate-x-full'}`}
         style={{ width: `${drawerWidth}px` }}
       >
-        {/* 리사이즈 핸들 (투명하지만 드래그 가능) */}
+        {/* 리사이즈 핸들 */}
         <div
-          className="absolute left-0 top-0 h-full w-2 cursor-ew-resize z-10"
+          className="absolute left-0 top-0 h-full w-2 cursor-ew-resize z-10 hover:bg-green-200"
           onMouseDown={(e) => {
             e.preventDefault();
             setIsResizing(true);
           }}
           title="크기 조절"
         />
+
         <div className="flex flex-col h-full">
           {/* 헤더 */}
-          <div className="p-4 bg-green-600 text-white flex justify-between items-center">
-            <h2 className="font-bold text-lg">Mr. DAEBAK AI</h2>
-            <button onClick={handleClose} className="text-2xl hover:text-gray-200">
-              &times;
-            </button>
+          <div className="p-4 bg-green-600 text-white">
+            <div className="flex justify-between items-center">
+              <div>
+                <h2 className="font-bold text-lg">Mr. DAEBAK AI</h2>
+                {flowState !== OrderFlowState.IDLE && (
+                  <span className="text-xs bg-green-500 px-2 py-0.5 rounded mt-1 inline-block">
+                    {getFlowStateLabel(flowState)}
+                  </span>
+                )}
+              </div>
+              <button onClick={handleClose} className="text-2xl hover:text-gray-200">
+                &times;
+              </button>
+            </div>
           </div>
 
+          {/* 주문 요약 (장바구니가 있을 때만) */}
+          {currentOrder.length > 0 && (
+            <div className="p-3 bg-green-50 border-b border-green-100">
+              <div className="flex justify-between items-center mb-2">
+                <span className="font-semibold text-green-800 text-sm">현재 주문</span>
+                <span className="font-bold text-green-600">
+                  ₩{totalPrice.toLocaleString()}
+                </span>
+              </div>
+              <div className="space-y-1 max-h-32 overflow-y-auto">
+                {currentOrder.map((item, idx) => (
+                  <div key={idx} className="flex justify-between text-xs text-gray-600">
+                    <span>
+                      {item.dinnerName}
+                      {item.servingStyleName && ` (${item.servingStyleName})`}
+                      {item.quantity > 0 && ` x${item.quantity}`}
+                    </span>
+                    <span>₩{item.totalPrice.toLocaleString()}</span>
+                  </div>
+                ))}
+              </div>
+              {selectedAddress && (
+                <div className="mt-2 pt-2 border-t border-green-200 text-xs text-gray-500">
+                  📍 {selectedAddress}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* 채팅 영역 */}
           <div className="flex-1 p-4 overflow-y-auto bg-gray-50">
-            {messages.length === 0 ? (
-              <div className="text-center text-gray-500 mt-10">
-                <p className="text-lg mb-2">무엇을 도와드릴까요? 🎤</p>
-                <p className="text-sm">"발렌타인 디너 하나 담아줘"</p>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {messages.map((msg, idx) => (
+            <div className="space-y-4">
+              {messages.map((msg, idx) => (
+                <div
+                  key={idx}
+                  className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                >
                   <div
-                    key={idx}
-                    className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                    className={`max-w-[85%] rounded-lg px-4 py-2 ${
+                      msg.role === 'user'
+                        ? 'bg-green-600 text-white'
+                        : 'bg-white text-gray-800 border border-gray-200 shadow-sm'
+                    }`}
                   >
-                    <div
-                      className={`max-w-[80%] rounded-lg px-4 py-2 ${
-                        msg.role === 'user'
-                          ? 'bg-green-600 text-white'
-                          : 'bg-white text-gray-800 border border-gray-200'
-                      }`}
-                    >
-                      <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                    <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                  </div>
+                </div>
+              ))}
+              {isLoading && (
+                <div className="flex justify-start">
+                  <div className="bg-white text-gray-800 border border-gray-200 rounded-lg px-4 py-2 shadow-sm">
+                    <div className="flex items-center space-x-2">
+                      <div className="w-2 h-2 bg-green-600 rounded-full animate-bounce" />
+                      <div className="w-2 h-2 bg-green-600 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }} />
+                      <div className="w-2 h-2 bg-green-600 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
                     </div>
                   </div>
-                ))}
-                {isLoading && (
-                  <div className="flex justify-start">
-                    <div className="bg-white text-gray-800 border border-gray-200 rounded-lg px-4 py-2">
-                      <p className="text-sm">생각 중...</p>
-                    </div>
-                  </div>
-                )}
-                <div ref={messagesEndRef} />
-              </div>
-            )}
+                </div>
+              )}
+              <div ref={messagesEndRef} />
+            </div>
           </div>
+
+          {/* 빠른 액션 버튼 (상태에 따라) */}
+          {flowState === OrderFlowState.ASKING_MORE && (
+            <div className="px-4 py-2 bg-gray-100 border-t border-gray-200">
+              <div className="flex gap-2">
+                <button
+                  onClick={() => sendTextMessage('더 없어요, 결제할게요')}
+                  disabled={isLoading}
+                  className="flex-1 py-2 px-3 bg-green-600 text-white text-sm rounded-lg hover:bg-green-700 disabled:bg-gray-300"
+                >
+                  결제하기
+                </button>
+                <button
+                  onClick={() => sendTextMessage('메뉴 더 볼래요')}
+                  disabled={isLoading}
+                  className="flex-1 py-2 px-3 bg-gray-200 text-gray-700 text-sm rounded-lg hover:bg-gray-300 disabled:bg-gray-100"
+                >
+                  더 주문하기
+                </button>
+              </div>
+            </div>
+          )}
+
+          {flowState === OrderFlowState.READY_TO_CHECKOUT && (
+            <div className="px-4 py-2 bg-green-100 border-t border-green-200">
+              <div className="flex gap-2">
+                <button
+                  onClick={() => sendTextMessage('결제 진행해주세요')}
+                  disabled={isLoading}
+                  className="flex-1 py-2 px-3 bg-green-600 text-white text-sm rounded-lg hover:bg-green-700 disabled:bg-gray-300"
+                >
+                  💳 결제 확정
+                </button>
+                <button
+                  onClick={() => sendTextMessage('취소할게요')}
+                  disabled={isLoading}
+                  className="py-2 px-3 bg-gray-200 text-gray-700 text-sm rounded-lg hover:bg-gray-300 disabled:bg-gray-100"
+                >
+                  취소
+                </button>
+              </div>
+            </div>
+          )}
+
+          {flowState === OrderFlowState.SELECTING_ADDRESS && userAddresses.length > 0 && (
+            <div className="px-4 py-2 bg-blue-50 border-t border-blue-100">
+              <p className="text-xs text-blue-800 mb-2">저장된 주소:</p>
+              <div className="flex flex-wrap gap-2">
+                {userAddresses.map((addr, idx) => (
+                  <button
+                    key={idx}
+                    onClick={() => sendTextMessage(`${idx + 1}번 주소로 해주세요`)}
+                    disabled={isLoading}
+                    className="py-1 px-2 bg-blue-100 text-blue-800 text-xs rounded hover:bg-blue-200 disabled:bg-gray-100"
+                  >
+                    {idx + 1}. {addr.length > 20 ? addr.substring(0, 20) + '...' : addr}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* 입력 영역 */}
           <div className="p-4 border-t border-gray-200 bg-white">
@@ -564,7 +541,7 @@ export const AIChatDrawer: React.FC = () => {
                 className="flex-1 border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-green-500 disabled:bg-gray-100"
               />
               <button
-                onClick={sendTextMessage}
+                onClick={() => sendTextMessage()}
                 disabled={isLoading || isRecording || !inputMessage.trim()}
                 className="px-4 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
               >
@@ -574,48 +551,6 @@ export const AIChatDrawer: React.FC = () => {
           </div>
         </div>
       </div>
-
-      {/* 주문 확인 모달 */}
-      {showConfirmModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center">
-          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
-            <h3 className="text-xl font-bold mb-4">주문 확인</h3>
-            <div className="space-y-2 mb-4">
-              {currentOrder.map((item, idx) => (
-                <div key={idx} className="flex justify-between text-sm">
-                  <span>
-                    {item.dinnerName}
-                    {item.servingStyleName && ` (${item.servingStyleName})`}
-                    {item.quantity > 0 && ` x${item.quantity}`}
-                  </span>
-                  <span className="font-semibold">₩{item.totalPrice.toLocaleString()}</span>
-                </div>
-              ))}
-            </div>
-            <div className="border-t pt-2 mb-4">
-              <div className="flex justify-between font-bold">
-                <span>총 금액</span>
-                <span>₩{totalPrice.toLocaleString()}</span>
-              </div>
-            </div>
-            <div className="flex gap-2">
-              <button
-                onClick={() => setShowConfirmModal(false)}
-                className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
-              >
-                취소
-              </button>
-              <button
-                onClick={handleConfirmOrder}
-                disabled={isLoading}
-                className="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-300"
-              >
-                {isLoading ? '처리 중...' : '주문하기'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </>
   );
 };

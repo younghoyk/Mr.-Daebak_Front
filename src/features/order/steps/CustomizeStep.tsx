@@ -33,7 +33,6 @@ export const CustomizeStep: React.FC = () => {
   const [allMenuItems, setAllMenuItems] = useState<MenuItemResponseDto[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [isUpdating, setIsUpdating] = useState(false);
   const [menuItemsByDinner, setMenuItemsByDinner] = useState<Record<string, DinnerMenuItemResponseDto[]>>({});
 
   // ----------------------------------------
@@ -194,120 +193,15 @@ export const CustomizeStep: React.FC = () => {
   };
 
   // ----------------------------------------
-  // 다음 단계로 이동 시 모든 변경사항을 한번에 API로 업데이트
+  // 다음 단계로 이동 (Store 상태만 유지, API 호출 없음)
+  // ★ 실제 API 반영은 CheckoutStep에서 결제 시 한 번에 처리
   // ----------------------------------------
-  const handleNext = async () => {
-    try {
-      setIsUpdating(true);
-      setError(null);
-
-      // 1. 각 Product의 메뉴 아이템 업데이트
-      for (const dinnerItem of selectedDinners) {
-        for (let i = 0; i < dinnerItem.instances.length; i++) {
-          const instance = dinnerItem.instances[i];
-          if (!instance.product) continue;
-
-          // 메뉴 커스터마이징 반영
-          for (const customization of instance.menuCustomizations) {
-            if (customization.currentQuantity !== customization.defaultQuantity) {
-              try {
-                // 기존 메뉴 아이템인지 확인
-                const existingMenuItem = instance.product.productMenuItems?.find(
-                  pmi => pmi.menuItemId === customization.menuItemId
-                );
-
-                if (existingMenuItem) {
-                  // 기존 메뉴 아이템 수량 업데이트
-                  await apiClient.patch(
-                    `/products/${instance.product.id}/menu-items/${customization.menuItemId}`,
-                    { quantity: Math.max(1, customization.currentQuantity) }
-                  );
-                } else {
-                  // 새 메뉴 아이템 추가
-                  await apiClient.post(
-                    `/products/${instance.product.id}/menu-items`,
-                    {
-                      menuItemId: customization.menuItemId,
-                      quantity: Math.max(1, customization.currentQuantity)
-                    }
-                  );
-                }
-              } catch (err: any) {
-                console.warn(`메뉴 아이템 업데이트 실패: ${customization.menuItemId}`, err);
-              }
-            }
-          }
-
-          // 공통 추가 메뉴는 각 Product에 추가하지 않음
-          // CheckoutStep에서 Cart 생성 시 별도로 처리
-
-          // 특별 요청사항을 Product의 memo에 저장 (memo API가 있다면)
-          if (globalMemo) {
-            try {
-              // memo 업데이트 API가 있다면 사용, 없으면 Cart 생성 시 전달
-              // await apiClient.patch(`/products/${instance.product.id}/memo`, { memo: globalMemo });
-            } catch (err) {
-              console.warn('메모 업데이트 실패:', err);
-            }
-          }
-        }
-      }
-
-      // 2. 모든 Product 정보 갱신
-      for (const dinnerItem of selectedDinners) {
-        for (let i = 0; i < dinnerItem.instances.length; i++) {
-          const instance = dinnerItem.instances[i];
-          if (!instance.product) continue;
-
-          try {
-            // Product의 메뉴 아이템 목록 가져오기
-            const menuItemsResponse = await apiClient.get(
-              `/products/${instance.product.id}/menu-items`
-            );
-
-            // 최신 Store 상태 가져오기
-            const currentDinners = useOrderFlowStore.getState().selectedDinners;
-            const currentDinnerItem = currentDinners.find(d => d.id === dinnerItem.id);
-            if (!currentDinnerItem || !currentDinnerItem.instances[i]?.product) continue;
-
-            const currentInstance = currentDinnerItem.instances[i];
-            const existingProduct = currentInstance.product!;
-            
-            // 기본 가격 계산 (dinner + style)
-            const basePrice = dinnerItem.dinner.basePrice + (currentInstance.style?.extraPrice || 0);
-            
-            // 메뉴 아이템 lineTotal 합산
-            const menuItemsTotal = menuItemsResponse.data.reduce((sum: number, item: any) => {
-              return sum + (Number(item.lineTotal) || 0);
-            }, 0);
-            
-            // totalPrice = 기본 가격 + 메뉴 아이템 가격
-            const totalPrice = basePrice + menuItemsTotal;
-            
-            const updatedProduct: ProductResponseDto = {
-              ...existingProduct,
-              productMenuItems: menuItemsResponse.data,
-              totalPrice: totalPrice,
-            };
-            
-            // Store 업데이트
-            setInstanceProduct(dinnerItem.id, i, updatedProduct);
-          } catch (err) {
-            console.error(`Product ${instance.product.id} 정보 갱신 실패:`, err);
-          }
-        }
-      }
-
-      // 3. 다음 단계로 이동
-      nextStep();
-    } catch (err: any) {
-      console.error('커스터마이징 업데이트 실패:', err);
-      const errorMessage = err.response?.data?.message || '커스터마이징 업데이트에 실패했습니다.';
-      setError(errorMessage);
-      alert(errorMessage);
-    } finally {
-      setIsUpdating(false);
-    }
+  const handleNext = () => {
+    // Store에 이미 저장된 상태 그대로 다음 단계로 이동
+    // - menuCustomizations: 커스터마이징 정보
+    // - globalAdditionalMenuItems: 추가 메뉴
+    // - globalMemo: 특별 요청사항
+    nextStep();
   };
 
   // 총 가격 계산 (각 Product 가격 + 공통 추가 메뉴 가격)
@@ -590,22 +484,16 @@ export const CustomizeStep: React.FC = () => {
         <button
           type="button"
           onClick={prevStep}
-          disabled={isUpdating}
-          className="flex-1 py-4 rounded-xl text-lg font-bold border-2 border-gray-300 text-gray-600 hover:bg-gray-50 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+          className="flex-1 py-4 rounded-xl text-lg font-bold border-2 border-gray-300 text-gray-600 hover:bg-gray-50 transition-all"
         >
           이전
         </button>
         <button
           type="button"
           onClick={handleNext}
-          disabled={isUpdating}
-          className={`flex-1 py-4 rounded-xl text-lg font-bold transition-all ${
-            isUpdating
-              ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-              : 'bg-green-600 text-white hover:bg-green-700'
-          }`}
+          className="flex-1 py-4 rounded-xl text-lg font-bold bg-green-600 text-white hover:bg-green-700 transition-all"
         >
-          {isUpdating ? '업데이트 중...' : '다음 단계로'}
+          다음 단계로
         </button>
       </div>
     </div>
