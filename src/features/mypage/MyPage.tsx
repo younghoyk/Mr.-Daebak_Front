@@ -4,8 +4,6 @@ import apiClient from '../../lib/axios';
 import { useAuthStore } from '../../stores/useAuthStore';
 import {
   UpdateUserProfileRequest,
-  PaymentMethodDto,
-  AddPaymentMethodRequest,
   UserCardResponseDto,
   AddCardRequest,
 } from '../../types/api';
@@ -23,7 +21,7 @@ import {
 // ============================================
 
 // 카드 타입 감지 함수
-const detectCardType = (cardNumber: string): PaymentMethodDto['cardType'] => {
+const detectCardType = (cardNumber: string): string => {
   const num = cardNumber.replace(/\s/g, '');
   if (/^4/.test(num)) return 'VISA';
   if (/^5[1-5]/.test(num)) return 'MASTERCARD';
@@ -35,15 +33,6 @@ const detectCardType = (cardNumber: string): PaymentMethodDto['cardType'] => {
 const formatCardNumber = (value: string): string => {
   const num = value.replace(/\D/g, '').slice(0, 16);
   return num.replace(/(\d{4})(?=\d)/g, '$1 ').trim();
-};
-
-// 만료일 포맷팅 함수
-const formatExpiryDate = (value: string): string => {
-  const num = value.replace(/\D/g, '').slice(0, 4);
-  if (num.length >= 2) {
-    return num.slice(0, 2) + '/' + num.slice(2);
-  }
-  return num;
 };
 
 export const MyPage: React.FC = () => {
@@ -323,8 +312,8 @@ export const MyPage: React.FC = () => {
   // ----------------------------------------
   // 카드 타입별 아이콘
   // ----------------------------------------
-  const getCardIcon = (cardType: PaymentMethodDto['cardType']) => {
-    switch (cardType) {
+  const getCardIcon = (cardBrand: string) => {
+    switch (cardBrand) {
       case 'VISA':
         return '💳';
       case 'MASTERCARD':
@@ -506,7 +495,7 @@ export const MyPage: React.FC = () => {
                 >
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                      <span className="text-2xl">{getCardIcon(method.cardType)}</span>
+                      <span className="text-2xl">{getCardIcon(method.cardBrand)}</span>
                       <div>
                         <p className="font-medium text-gray-900">
                           {method.cardBrand} · **** **** **** {method.cardNumber.slice(-4)}

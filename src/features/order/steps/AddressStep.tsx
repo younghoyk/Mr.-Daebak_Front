@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import apiClient from '../../../lib/axios';
 import { useOrderFlowStore } from '../../../stores/useOrderFlowStore';
-import { useAuthStore } from '../../../stores/useAuthStore';
 
 // ============================================
 // AddressStep 컴포넌트
@@ -13,7 +12,6 @@ import { useAuthStore } from '../../../stores/useAuthStore';
 // ============================================
 
 export const AddressStep: React.FC = () => {
-  const { user } = useAuthStore();
   const { selectedAddress, setAddress, nextStep, prevStep } = useOrderFlowStore();
 
   // ----------------------------------------

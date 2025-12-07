@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import apiClient from '../../../lib/axios';
 import { useOrderFlowStore } from '../../../stores/useOrderFlowStore';
 import { useAuthStore } from '../../../stores/useAuthStore';
-import { UserCardResponseDto, MenuItemResponseDto } from '../../../types/api';
+import { UserCardResponseDto, MenuItemResponseDto, ProductResponseDto } from '../../../types/api';
 
 // ============================================
 // CheckoutStep 컴포넌트
@@ -183,7 +183,7 @@ export const CheckoutStep: React.FC = () => {
 
       // 모든 디너 Product를 Cart에 담기
       // ★ unitPrice 포함: 프론트엔드에서 계산한 가격을 백엔드에 전달
-      const cartItems = selectedDinners.flatMap((item, dinnerIndex) =>
+      const cartItems = selectedDinners.flatMap((item) =>
         item.instances
           .filter(instance => instance.product)
           .map((instance, instanceIndex) => ({

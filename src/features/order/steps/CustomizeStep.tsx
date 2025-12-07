@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import apiClient from '../../../lib/axios';
 import { useOrderFlowStore } from '../../../stores/useOrderFlowStore';
-import { DinnerMenuItemResponseDto, MenuItemResponseDto, ProductResponseDto } from '../../../types/api';
+import { DinnerMenuItemResponseDto, MenuItemResponseDto } from '../../../types/api';
 
 // ============================================
 // CustomizeStep 컴포넌트
@@ -17,12 +17,10 @@ export const CustomizeStep: React.FC = () => {
     globalMemo,
     setInstanceMenuCustomizations,
     updateInstanceMenuItemQuantity,
-    setInstanceProduct,
     setGlobalMemo,
     addGlobalAdditionalMenuItem,
     removeGlobalAdditionalMenuItem,
     updateGlobalAdditionalMenuItemQuantity,
-    getTotalPrice,
     nextStep,
     prevStep,
   } = useOrderFlowStore();
@@ -289,7 +287,6 @@ export const CustomizeStep: React.FC = () => {
               {dinnerItem.instances.map((instance, instanceIndex) => {
                 if (!instance.product) return null;
 
-                const defaultMenuItems = menuItemsByDinner[dinnerItem.dinner.id] || [];
                 const customizations = instance.menuCustomizations;
                 // 실시간 가격 계산
                 const productPrice = calculateProductPrice(dinnerItem, instanceIndex);
