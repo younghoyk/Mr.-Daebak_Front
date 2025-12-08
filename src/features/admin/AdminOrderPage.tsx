@@ -7,7 +7,74 @@ import {
   DeliveryStatus,
   ApproveOrderRequest,
   UpdateDeliveryStatusRequest,
+  MenuItemResponseDto,
 } from '../../types/api';
+
+// ============================================
+// 재고 표시 단위 변환 설정 (12종류)
+// ============================================
+// DB stock 값 → 표시 단위로 변환
+// 예: 스테이크 stock=5 (인분) → 표시: 1000g (5 × 200)
+interface StockDisplayConfig {
+  name: string;
+  unitType: string;
+  displayUnit: string;
+  ratio: number; // stock × ratio = 표시값
+}
+
+const STOCK_DISPLAY_CONFIGS: StockDisplayConfig[] = [
+  { name: '스테이크', unitType: '인분', displayUnit: 'g', ratio: 200 },
+  { name: '샐러드', unitType: '인분', displayUnit: 'g', ratio: 200 },
+  { name: '베이컨', unitType: '인분', displayUnit: 'g', ratio: 100 },
+  { name: '에그 스크램블', unitType: '인분', displayUnit: '개', ratio: 1 },
+  { name: '와인', unitType: '잔', displayUnit: '잔', ratio: 1 },
+  { name: '와인', unitType: '병', displayUnit: '병', ratio: 1 },
+  { name: '샴페인', unitType: '잔', displayUnit: '잔', ratio: 1 },
+  { name: '샴페인', unitType: '병', displayUnit: '병', ratio: 1 },
+  { name: '커피', unitType: '잔', displayUnit: '잔', ratio: 1 },
+  { name: '커피', unitType: '포트', displayUnit: '포트', ratio: 1 },
+  { name: '빵', unitType: '개', displayUnit: '개', ratio: 1 },
+  { name: '바게트빵', unitType: '개', displayUnit: '개', ratio: 1 },
+];
+
+// 메뉴 아이템의 표시 설정 찾기
+const getDisplayConfig = (menuItem: MenuItemResponseDto): StockDisplayConfig | null => {
+  return STOCK_DISPLAY_CONFIGS.find(
+    config => config.name === menuItem.name && config.unitType === menuItem.unitType
+  ) || null;
+};
+
+// stock을 표시 단위로 변환
+const stockToDisplay = (menuItem: MenuItemResponseDto): number => {
+  const config = getDisplayConfig(menuItem);
+  if (!config) return menuItem.stock;
+  return menuItem.stock * config.ratio;
+};
+
+// 표시 단위를 stock으로 변환
+const displayToStock = (menuItem: MenuItemResponseDto, displayValue: number): number => {
+  const config = getDisplayConfig(menuItem);
+  if (!config) return displayValue;
+  return Math.round(displayValue / config.ratio);
+};
+
+// 표시 단위 문자열 가져오기
+const getDisplayUnit = (menuItem: MenuItemResponseDto): string => {
+  const config = getDisplayConfig(menuItem);
+  return config?.displayUnit || menuItem.unitType;
+};
+
+// 메뉴 아이템 표시 라벨 생성
+const getMenuItemLabel = (menuItem: MenuItemResponseDto): string => {
+  const config = getDisplayConfig(menuItem);
+  if (config) {
+    // 특별한 단위 변환이 있는 경우
+    if (config.name === '스테이크') return '고기 (스테이크)';
+    if (config.name === '샐러드') return '채소 (샐러드)';
+    if (config.name === '에그 스크램블') return '계란 (에그 스크램블)';
+  }
+  return `${menuItem.name} (${menuItem.unitType})`;
+};
 
 // ============================================
 // AdminOrderPage 컴포넌트
@@ -66,6 +133,12 @@ export const AdminOrderPage: React.FC = () => {
   const [rejectionReason, setRejectionReason] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
 
+  // 재고 관리 상태
+  const [menuItems, setMenuItems] = useState<MenuItemResponseDto[]>([]);
+  const [stockInputs, setStockInputs] = useState<Record<string, string>>({});
+  const [stockLoading, setStockLoading] = useState(false);
+  const [showStockSection, setShowStockSection] = useState(false);
+
   const fetchOrders = useCallback(async () => {
     try {
       setIsLoading(true);
@@ -88,6 +161,59 @@ export const AdminOrderPage: React.FC = () => {
     }
   }, []);
 
+  // 재고 목록 조회
+  const fetchMenuItems = useCallback(async () => {
+    try {
+      setStockLoading(true);
+      const response = await apiClient.get<MenuItemResponseDto[]>('/menu-items/getAllMenuItems');
+      setMenuItems(response.data || []);
+      // 입력 필드 초기화
+      const inputs: Record<string, string> = {};
+      response.data.forEach(item => {
+        inputs[item.id] = '';
+      });
+      setStockInputs(inputs);
+    } catch (err: any) {
+      console.error('메뉴 아이템 로딩 실패:', err);
+    } finally {
+      setStockLoading(false);
+    }
+  }, []);
+
+  // 재고 수정
+  const handleUpdateStock = async (menuItem: MenuItemResponseDto) => {
+    const inputValue = stockInputs[menuItem.id];
+    if (!inputValue || inputValue.trim() === '') {
+      alert('입고할 수량을 입력해주세요.');
+      return;
+    }
+
+    const displayValue = parseFloat(inputValue);
+    if (isNaN(displayValue) || displayValue < 0) {
+      alert('올바른 숫자를 입력해주세요.');
+      return;
+    }
+
+    // 표시 단위를 DB stock 단위로 변환
+    const stockValue = displayToStock(menuItem, displayValue);
+
+    try {
+      setStockLoading(true);
+      await apiClient.patch(`/admin/menu-items/${menuItem.id}/stock`, { stock: stockValue });
+      alert(`${getMenuItemLabel(menuItem)} 재고가 ${displayValue}${getDisplayUnit(menuItem)}(으)로 수정되었습니다.`);
+      // 입력 필드 초기화
+      setStockInputs(prev => ({ ...prev, [menuItem.id]: '' }));
+      // 재고 목록 새로고침
+      await fetchMenuItems();
+    } catch (err: any) {
+      console.error('재고 수정 실패:', err);
+      const errorMessage = err.response?.data?.message || '재고 수정에 실패했습니다.';
+      alert(errorMessage);
+    } finally {
+      setStockLoading(false);
+    }
+  };
+
   useEffect(() => {
     // 관리자 권한 확인
     if (user?.authority !== 'ROLE_ADMIN') {
@@ -103,6 +229,7 @@ export const AdminOrderPage: React.FC = () => {
           await validateToken();
         }
         await fetchOrders();
+        await fetchMenuItems();
       } catch (err) {
         setError('인증에 실패했습니다. 다시 로그인해주세요.');
         setIsLoading(false);
@@ -110,7 +237,7 @@ export const AdminOrderPage: React.FC = () => {
     };
 
     initialize();
-  }, [user, isAuthenticated, validateToken, fetchOrders]);
+  }, [user, isAuthenticated, validateToken, fetchOrders, fetchMenuItems]);
 
   const handleSearch = async () => {
     // 검색어가 없으면 기본 목록으로 복귀
@@ -261,7 +388,105 @@ export const AdminOrderPage: React.FC = () => {
   return (
     <div className="max-w-6xl mx-auto p-4 pt-10 pb-20">
       <h1 className="text-2xl font-bold mb-6">관리자 주문 관리</h1>
-      
+
+      {/* 재고 관리 섹션 */}
+      <div className="bg-white rounded-lg shadow-sm border mb-6">
+        <button
+          onClick={() => setShowStockSection(!showStockSection)}
+          className="w-full p-4 flex items-center justify-between text-left hover:bg-gray-50 transition-colors"
+        >
+          <div className="flex items-center gap-2">
+            <span className="text-xl">📦</span>
+            <h2 className="text-lg font-bold text-gray-900">재고 관리</h2>
+          </div>
+          <span className="text-gray-400 text-xl">
+            {showStockSection ? '▲' : '▼'}
+          </span>
+        </button>
+
+        {showStockSection && (
+          <div className="p-4 border-t">
+            {stockLoading ? (
+              <div className="flex items-center justify-center py-8">
+                <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-green-600"></div>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {menuItems.length === 0 ? (
+                  <p className="text-gray-500 text-center py-4">재고 정보가 없습니다.</p>
+                ) : (
+                  <div className="grid gap-3">
+                    {/* 헤더 */}
+                    <div className="grid grid-cols-4 gap-3 px-3 py-2 bg-gray-100 rounded-lg font-medium text-sm text-gray-600">
+                      <div>품목</div>
+                      <div className="text-center">현재 재고</div>
+                      <div className="text-center">새 재고 입력</div>
+                      <div className="text-center">적용</div>
+                    </div>
+
+                    {/* 재고 목록 */}
+                    {menuItems.map((item) => (
+                      <div
+                        key={item.id}
+                        className="grid grid-cols-4 gap-3 items-center px-3 py-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors"
+                      >
+                        <div className="font-medium text-gray-900">
+                          {getMenuItemLabel(item)}
+                        </div>
+                        <div className="text-center">
+                          <span className="text-lg font-bold text-green-600">
+                            {stockToDisplay(item).toLocaleString()}
+                          </span>
+                          <span className="text-sm text-gray-500 ml-1">
+                            {getDisplayUnit(item)}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-center gap-1">
+                          <input
+                            type="number"
+                            value={stockInputs[item.id] || ''}
+                            onChange={(e) => setStockInputs(prev => ({
+                              ...prev,
+                              [item.id]: e.target.value
+                            }))}
+                            placeholder="0"
+                            min="0"
+                            className="w-24 px-3 py-2 border border-gray-300 rounded-lg text-center focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                          />
+                          <span className="text-sm text-gray-500">
+                            {getDisplayUnit(item)}
+                          </span>
+                        </div>
+                        <div className="text-center">
+                          <button
+                            onClick={() => handleUpdateStock(item)}
+                            disabled={stockLoading || !stockInputs[item.id]}
+                            className="px-4 py-2 bg-green-600 text-white text-sm rounded-lg font-medium hover:bg-green-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            적용
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* 새로고침 버튼 */}
+                <div className="flex justify-end pt-2">
+                  <button
+                    onClick={fetchMenuItems}
+                    disabled={stockLoading}
+                    className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900 transition-colors disabled:opacity-50"
+                  >
+                    🔄 새로고침
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
       {/* 전체 주문 통계 */}
       <div className="bg-white rounded-lg shadow-sm border p-4 mb-6">
         <div className="grid grid-cols-4 gap-4 text-center">
