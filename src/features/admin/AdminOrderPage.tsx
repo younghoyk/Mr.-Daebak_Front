@@ -69,11 +69,11 @@ const getMenuItemLabel = (menuItem: MenuItemResponseDto): string => {
   const config = getDisplayConfig(menuItem);
   if (config) {
     // 특별한 단위 변환이 있는 경우
-    if (config.name === '스테이크') return '고기 (스테이크)';
-    if (config.name === '샐러드') return '채소 (샐러드)';
-    if (config.name === '에그 스크램블') return '계란 (에그 스크램블)';
+    if (config.name === '스테이크') return '고기';
+    if (config.name === '샐러드') return '채소';
+    if (config.name === '에그 스크램블') return '계란';
   }
-  return `${menuItem.name} (${menuItem.unitType})`;
+  return menuItem.name;
 };
 
 // ============================================
